@@ -28,7 +28,8 @@ sys.path.insert(0, BASE_DIR)
 from server.gateway_app import (
     HTML_GATEWAY_APP,
     api_get_gateway_status,
-    api_save_cloudflare_auth,
+    api_start_cloudflare_login,
+    api_check_cloudflare_login,
     api_toggle_gateway
 )
 from server.web_portal import (
@@ -48,7 +49,8 @@ def create_application():
     # ── 1. CỔNG SERVER (Desktop App Dashboard 1) ─────────────
     app.router.add_get("/", lambda req: web.Response(text=HTML_GATEWAY_APP, content_type="text/html"))
     app.router.add_get("/api/gateway/status", api_get_gateway_status)
-    app.router.add_post("/api/gateway/cf-auth", api_save_cloudflare_auth)
+    app.router.add_post("/api/gateway/cf-start-login", api_start_cloudflare_login)
+    app.router.add_get("/api/gateway/cf-check-login", api_check_cloudflare_login)
     app.router.add_post("/api/gateway/toggle", api_toggle_gateway)
 
     # ── 2. WEB PORTAL QUẢN LÝ THIẾT BỊ (Dashboard 2 - xiaozhi.me Clone) ──
