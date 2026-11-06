@@ -61,21 +61,34 @@ def create_application():
     return app
 
 
-async def run_server(port: int = 8001):
-    app = create_application()
-    runner = web.AppRunner(app)
-    await runner.setup()
-    site = web.TCPSite(runner, "0.0.0.0", port)
-    await site.start()
-    print(f"\n[OK] Ni-Oh Server Gateway đang chạy tại: http://localhost:{port}")
-    print(f"[OK] Web Portal Quản lý Thiết bị (xiaozhi.me style) tại: http://localhost:{port}/portal\n")
+def is_port_in_use(port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def open_browser(url: str):
     try:
-        webbrowser.open(f"http://localhost:{port}")
+        if sys.platform == "win32":
+            os.system(f'start "" "{url}"')
+        else:
+            webbrowser.open(url)
     except Exception:
         pass
 
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(run_server(8001))
-    loop.run_forever()
+    port = 8001
+    if is_port_in_use(port):
+        print(f"[INFO] Server đã chạy sẵn tại http://localhost:{port}. Đang mở trình duyệt...")
+        open_browser(f"http://localhost:{port}")
+        sys.exit(0)
+
+    app = create_application()
+    print(f"\n[OK] Ni-Oh Server Gateway đang chạy tại: http://localhost:{port}")
+    print(f"[OK] Web Portal Quản lý Thiết bị tại: http://localhost:{port}/portal\n")
+    
+    open_browser(f"http://localhost:{port}")
+    web.run_app(app, host="0.0.0.0", port=port, print=None, access_log=None)
+
+
