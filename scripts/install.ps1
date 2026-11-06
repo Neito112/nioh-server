@@ -1,13 +1,13 @@
 # ============================================================
 # Ni-Oh Distributed Server — 1-Click Installer (Windows)
 # ============================================================
-# Chạy: powershell -ExecutionPolicy Bypass -File install.ps1
+# Tự động cài đặt & tạo Shortcut icon "Ni-Oh Server" trên Desktop
+# Toàn bộ cấu hình được thực hiện 100% trên giao diện trực quan!
 # ============================================================
 
 $ErrorActionPreference = "Stop"
 $REPO_URL = "https://github.com/Neito112/nioh-server"
 $INSTALL_DIR = if ($env:NIOH_DIR) { $env:NIOH_DIR } else { "$env:USERPROFILE\nioh-server" }
-$SERVICE_NAME = "NiOhServer"
 
 function Write-Info  { param($msg) Write-Host "[INFO] $msg" -ForegroundColor Cyan }
 function Write-Ok    { param($msg) Write-Host "[OK]   $msg" -ForegroundColor Green }
@@ -17,7 +17,7 @@ function Write-Err   { param($msg) Write-Host "[ERR]  $msg" -ForegroundColor Red
 Write-Host @"
 ╔══════════════════════════════════════════╗
 ║          Ni-Oh Distributed Server        ║
-║          1-Click Installer v1.0          ║
+║          1-Click Installer v2.0          ║
 ╚══════════════════════════════════════════╝
 "@ -ForegroundColor Cyan
 
@@ -37,171 +37,100 @@ foreach ($py in @("python", "python3", "py")) {
 }
 
 if (-not $PYTHON) {
-    Write-Warn "Python 3.10+ không tìm thấy. Đang cài qua winget..."
+    Write-Warn "Python 3.10+ không tìm thấy. Đang tự động cài qua winget..."
     try {
         winget install Python.Python.3.12 --accept-source-agreements --accept-package-agreements
         $PYTHON = "python"
-        Write-Ok "Python 3.12 đã cài"
+        Write-Ok "Python 3.12 đã cài đặt thành công"
     } catch {
-        Write-Err "Không cài được Python. Tải tại: https://python.org/downloads"
+        Write-Err "Không thể tự động cài Python. Vui lòng tải tại: https://python.org/downloads"
     }
 }
 
 # ── 2. Kiểm tra Git ─────────────────────────────────────────
 if (-not (Get-Command git -ErrorAction SilentlyContinue)) {
-    Write-Warn "Git không tìm thấy. Đang cài..."
+    Write-Warn "Git không tìm thấy. Đang cài đặt..."
     winget install Git.Git --accept-source-agreements --accept-package-agreements
 }
 
 # ── 3. Clone / Update repo ──────────────────────────────────
 if (Test-Path "$INSTALL_DIR\.git") {
-    Write-Info "Repo đã tồn tại → update..."
+    Write-Info "Repo đã tồn tại → Đồng bộ bản mới nhất..."
     Push-Location $INSTALL_DIR
-    git pull origin main
+    git pull origin master
     Pop-Location
 } else {
-    Write-Info "Clone repo về $INSTALL_DIR..."
+    Write-Info "Tải mã nguồn Ni-Oh Server về $INSTALL_DIR..."
     git clone $REPO_URL $INSTALL_DIR
 }
 
-# ── 4. Clone xiaozhi-server upstream ────────────────────────
-$XIAOZHI_DIR = "$INSTALL_DIR\xiaozhi-server"
-if (-not (Test-Path $XIAOZHI_DIR)) {
-    Write-Info "Clone xiaozhi-esp32-server..."
-    git clone --depth=1 https://github.com/xinnan-tech/xiaozhi-esp32-server "$INSTALL_DIR\_upstream"
-    Copy-Item "$INSTALL_DIR\_upstream\main\xiaozhi-server\*" $XIAOZHI_DIR -Recurse -Force
-    Remove-Item "$INSTALL_DIR\_upstream" -Recurse -Force
-    Write-Ok "xiaozhi-server sẵn sàng"
+# ── 4. Tạo virtualenv & cài dependencies ────────────────────
+Write-Info "Chuẩn bị môi trường Python..."
+if (-not (Test-Path "$INSTALL_DIR\.venv")) {
+    & $PYTHON -m venv "$INSTALL_DIR\.venv"
 }
-
-# ── 5. Tạo virtualenv ───────────────────────────────────────
-Write-Info "Tạo virtual environment..."
-& $PYTHON -m venv "$INSTALL_DIR\.venv"
-$VENV_PY = "$INSTALL_DIR\.venv\Scripts\python.exe"
 $VENV_PIP = "$INSTALL_DIR\.venv\Scripts\pip.exe"
+$VENV_PY = "$INSTALL_DIR\.venv\Scripts\python.exe"
 
-Write-Info "Cài dependencies..."
+Write-Info "Cài đặt thư viện cần thiết (duckduckgo, yt-dlp, aiohttp...)..."
 & $VENV_PIP install --quiet --upgrade pip
-& $VENV_PIP install --quiet -r "$XIAOZHI_DIR\requirements.txt"
 & $VENV_PIP install --quiet -r "$INSTALL_DIR\requirements.txt"
-Write-Ok "Dependencies đã cài xong"
+Write-Ok "Đã cài đặt toàn bộ thư viện cần thiết"
 
-# ── 6. Thu thập config ──────────────────────────────────────
+# ── 5. Tạo file .env mặc định nếu chưa có ───────────────────
 $ENV_FILE = "$INSTALL_DIR\.env"
-
-function Collect-Config {
-    Write-Host ""
-    Write-Host "════════ Cấu hình Ni-Oh Server ════════" -ForegroundColor Yellow
-
-    $apiKey = Read-Host "  LLM API Key (OpenRouter/OpenAI) → https://openrouter.ai/keys`n  NIOH_API_KEY"
-    
-    $baseUrl = Read-Host "  LLM Base URL [https://openrouter.ai/api/v1]"
-    if (-not $baseUrl) { $baseUrl = "https://openrouter.ai/api/v1" }
-    
-    $model = Read-Host "  Model [deepseek/deepseek-chat]"
-    if (-not $model) { $model = "deepseek/deepseek-chat" }
-
-    Write-Host ""
-    Write-Host "Node Registry (đồng bộ nhiều máy):" -ForegroundColor Yellow
-    Write-Host "  Tạo token tại: https://github.com/settings/tokens (scope: gist)" -ForegroundColor Cyan
-    $ghToken = Read-Host "  GitHub Token (để trống = single node)"
-
-    Write-Host ""
-    Write-Host "Cloudflare Domain (optional):" -ForegroundColor Yellow
-    Write-Host "  Để trống = tự động dùng trycloudflare.com (free)" -ForegroundColor Cyan
-    $cfDomain = Read-Host "  Domain"
-
-    $nodeId = "$env:COMPUTERNAME-$(Get-Random -Maximum 999999)"
-
+if (-not (Test-Path $ENV_FILE)) {
     @"
-# Ni-Oh Server Config — tự động tạo bởi install.ps1
-
-# ── LLM Config ──
-NIOH_API_KEY=$apiKey
-NIOH_LLM_BASE_URL=$baseUrl
-NIOH_MODEL=$model
-
-# ── ASR / TTS (optional) ──
-NIOH_ASR_TYPE=
-NIOH_ASR_KEY=
-NIOH_TTS_TYPE=
-NIOH_TTS_KEY=
-
-# ── Node Registry ──
-NIOH_GITHUB_TOKEN=$ghToken
-NIOH_GIST_ID=
-NIOH_NODE_ID=$nodeId
-
-# ── Cloudflare Tunnel ──
-NIOH_CF_DOMAIN=$cfDomain
-NIOH_CF_TUNNEL_UUID=
-
-# ── Server Ports ──
+NIOH_HOST_ACCOUNT=admin@nioh.local
+NIOH_LLM_PROVIDER=openrouter
+NIOH_LLM_BASE_URL=https://openrouter.ai/api/v1
+NIOH_API_KEY=
+NIOH_MODEL=deepseek/deepseek-chat
+NIOH_GITHUB_TOKEN=
+NIOH_CF_DOMAIN=
 NIOH_WS_PORT=8000
 NIOH_HTTP_PORT=8003
-
-# ── Firmware ──
-NIOH_FIRMWARE_VERSION=2.5.3
-NIOH_FIRMWARE_URL=
 "@ | Out-File -FilePath $ENV_FILE -Encoding UTF8
-
-    Write-Ok ".env đã lưu tại $ENV_FILE"
+    Write-Ok "Khởi tạo file cấu hình mặc định (Quản lý trực tiếp từ UI)"
 }
 
-if (-not (Test-Path $ENV_FILE)) {
-    Collect-Config
-} else {
-    Write-Warn ".env đã tồn tại."
-    $reconfig = Read-Host "Muốn cấu hình lại? (y/N)"
-    if ($reconfig -eq "y") { Collect-Config }
-}
-
-# ── 7. Cài Windows Service / Task Scheduler ─────────────────
-Write-Info "Cài Windows Task Scheduler để tự khởi động..."
-
-$startScript = "$INSTALL_DIR\start.ps1"
-@"
-Set-Location '$INSTALL_DIR'
-`$env:PYTHONPATH = '$INSTALL_DIR'
-Get-Content '$ENV_FILE' | ForEach-Object {
-    if (`$_ -match '^([^#=]+)=(.*)$') {
-        [System.Environment]::SetEnvironmentVariable(`$Matches[1].Trim(), `$Matches[2].Trim(), 'Process')
-    }
-}
-& '$VENV_PY' -m server.main
-"@ | Out-File -FilePath $startScript -Encoding UTF8
-
+# ── 6. Tạo Desktop Shortcut với Icon chuyên nghiệp ──────────
+Write-Info "Tạo Shortcut 'Ni-Oh Server' trên màn hình Desktop..."
 try {
-    $action = New-ScheduledTaskAction -Execute "powershell.exe" `
-        -Argument "-WindowStyle Hidden -ExecutionPolicy Bypass -File `"$startScript`""
-    $trigger = New-ScheduledTaskTrigger -AtLogOn
-    $settings = New-ScheduledTaskSettingsSet -RestartCount 3 -RestartInterval (New-TimeSpan -Minutes 1) `
-        -ExecutionTimeLimit (New-TimeSpan -Hours 0)
-    $principal = New-ScheduledTaskPrincipal -UserId $env:USERNAME -RunLevel Highest
-    
-    Register-ScheduledTask -TaskName $SERVICE_NAME -Action $action `
-        -Trigger $trigger -Settings $settings -Principal $principal -Force | Out-Null
-    
-    Write-Ok "Task Scheduler '$SERVICE_NAME' đã cài (tự chạy khi đăng nhập)"
+    $desktopPath = [Environment]::GetFolderPath("Desktop")
+    $shortcutPath = "$desktopPath\Ni-Oh Server.lnk"
+    $wscriptPath = "$env:SystemRoot\System32\wscript.exe"
+    $vbsPath = "$INSTALL_DIR\run_silent.vbs"
+    $iconPath = "$INSTALL_DIR\assets\icon.ico"
+
+    $WshShell = New-Object -ComObject WScript.Shell
+    $Shortcut = $WshShell.CreateShortcut($shortcutPath)
+    $Shortcut.TargetPath = $wscriptPath
+    $Shortcut.Arguments = "`"$vbsPath`""
+    $Shortcut.WorkingDirectory = $INSTALL_DIR
+    if (Test-Path $iconPath) {
+        $Shortcut.IconLocation = "$iconPath,0"
+    } else {
+        $Shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,14"
+    }
+    $Shortcut.Description = "Ni-Oh Server Engine & Control Center"
+    $Shortcut.Save()
+    Write-Ok "Đã tạo Icon 'Ni-Oh Server' ngay trên Desktop của bạn!"
 } catch {
-    Write-Warn "Không cài được Task Scheduler: $_"
-    Write-Warn "Chạy thủ công bằng: $startScript"
+    Write-Warn "Không thể tạo Shortcut Desktop: $_"
 }
 
-# ── 8. Done ─────────────────────────────────────────────────
+# ── 7. Hoàn tất & Khởi chạy ngay ─────────────────────────────
 Write-Host ""
-Write-Host "════════════════════════════════════════" -ForegroundColor Green
-Write-Host "✓ Ni-Oh Server cài xong!" -ForegroundColor Green
-Write-Host "════════════════════════════════════════" -ForegroundColor Green
+Write-Host "═════════════════════════════════════════════════════" -ForegroundColor Green
+Write-Host "   ✓ CÀI ĐẶT THÀNH CÔNG NI-OH SERVER ENGINE!" -ForegroundColor Green
+Write-Host "═════════════════════════════════════════════════════" -ForegroundColor Green
 Write-Host ""
-Write-Host "  Thư mục:    $INSTALL_DIR" -ForegroundColor Cyan
-Write-Host "  Config:     $ENV_FILE" -ForegroundColor Cyan
-Write-Host "  Chạy tay:   $startScript" -ForegroundColor Cyan
+Write-Host "  * Bạn KHÔNG CẦN sửa file code hay cấu hình thủ công." -ForegroundColor Cyan
+Write-Host "  * Chỉ cần nhấp đúp vào Icon 'Ni-Oh Server' trên Desktop." -ForegroundColor Cyan
+Write-Host "  * Toàn bộ cài đặt (API Key, Model, Mạng...) nằm ngay trên giao diện!" -ForegroundColor Cyan
 Write-Host ""
-Write-Host "  Khởi động ngay?" -ForegroundColor Yellow
-$start = Read-Host "  (y/N)"
-if ($start -eq "y") {
-    Write-Info "Đang khởi động..."
-    Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$startScript`"" -WindowStyle Normal
-}
 
+# Tự động kích hoạt Dashboard ngay sau khi cài
+Write-Info "Đang mở giao diện Ni-Oh Server Control Center..."
+Start-Process "wscript.exe" -ArgumentList "`"$INSTALL_DIR\run_silent.vbs`""

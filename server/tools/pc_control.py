@@ -123,3 +123,4 @@ def _handle_macos_actions(action: str, param: str) -> dict:
         subprocess.run(["open", "-a", param], check=False)
         return {"success": True, "message": f"Đã mở {param}."}
     return {"success": False, "message": f"Lệnh {action} chưa cấu hình trên macOS."}
+

@@ -65,3 +65,4 @@ def _ddg_search(query: str, max_results: int):
                 if "Text" in t:
                     items.append({"title": t.get("FirstURL", ""), "body": t.get("Text", "")})
             return items
+

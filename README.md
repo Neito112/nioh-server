@@ -1,30 +1,29 @@
 # Ni-Oh Server & Control Center
 
 > **Hệ sinh thái máy chủ giọng nói AI phân tán tương thích Xiaozhi ESP32.**  
-> Hỗ trợ đa nhà cung cấp LLM (OpenRouter, DeepSeek, OpenAI, Groq, Ollama...), Cloudflare Tunnel tự động, quản lý thiết bị qua mã 6 số (thay thế xiaozhi.me) và bộ công cụ phản hồi phần cứng hoàn toàn miễn phí.
+> Ứng dụng Desktop có biểu tượng (Icon) kích hoạt trực tiếp — **toàn bộ cài đặt được quản lý 100% trên giao diện đồ họa trực quan, KHÔNG cần mở code hay sửa file cấu hình thủ công!**
 
 ---
 
 ## 🌟 Tính Năng Nổi Bật
 
-### 1. Mô Hình 2 Dashboard Độc Lập
-* **Desktop App (Dashboard 1 - Server Host Control Center):**
-  * Dành cho người quản trị/chủ máy chủ.
-  * Quản lý tài nguyên, trạng thái Server, nút bấm 1-click khởi chạy Cloudflare Tunnel.
-  * Không khóa cứng provider: Hỗ trợ bất kỳ API key nào (OpenRouter, DeepSeek, OpenAI, Groq, Ollama chạy local...).
-  * Bảng công tắc (Toggle Switches) bật/tắt toàn bộ các Tool và MCP.
-* **Web Portal (Dashboard 2 - Tương tự xiaozhi.me):**
-  * Đăng nhập ở bất kỳ đâu (điện thoại, máy tính bảng, ngoài mạng LAN).
-  * Ghép đôi mạch ESP32 bằng **mã 6 chữ số (Pin Code)** hiển thị trên màn hình LCD.
-  * Tùy biến nhân vật AI: Đổi tên bot, cấu hình tính cách (System Prompt), chọn giọng đọc TTS.
+### 1. Kích Hoạt 1 Chạm & Cấu Hình Trên Giao Diện (Zero-Code Setup)
+* **Icon Desktop Tiện Lợi:** Sau khi cài đặt, tự động tạo biểu tượng **"Ni-Oh Server"** ngay trên màn hình Desktop. Chỉ cần nhấp đúp là khởi chạy ngầm, tự mở giao diện điều khiển.
+* **Không Đụng File Code:** Toàn bộ việc chọn Provider (OpenRouter, DeepSeek, OpenAI, Groq, Ollama...), dán API Key, chọn Model, đổi cổng, bật/tắt Cloudflare Tunnel... đều thực hiện bằng chuột trên Dashboard.
+* **File khởi động nhanh:** Trong thư mục có sẵn file `Khởi Động Ni-Oh.bat` tiện lợi cho mọi người dùng.
 
-### 2. Kiến Trúc Phân Tán (Multi-Node Không Node Chính)
-* Tất cả các máy cài đặt server đều bình đẳng, đóng vai trò là server dự phòng cho nhau.
-* Đồng bộ cấu hình và danh sách node qua **GitHub Gist cá nhân** — không cần thuê database hay server trung gian.
-* ESP32 tự động nhận danh sách tất cả các node đang online qua OTA Endpoint để kết nối.
+### 2. Mô Hình 2 Dashboard Tách Biệt
+* **Dashboard 1: Desktop App (Server Host Control Center):**
+  * Quản trị hạ tầng máy chủ: Xem trạng thái Server, URL WebSocket, Endpoint OTA.
+  * Tùy chọn nhà cung cấp AI không bị khóa cứng (hỗ trợ mọi endpoint OpenAI-compatible).
+  * Công tắc gạt (Toggle) bật/tắt toàn bộ các công cụ & MCP.
+* **Dashboard 2: Web Portal (Quản lý Thiết bị - Thay thế xiaozhi.me):**
+  * Truy cập được từ điện thoại, tablet ở bất kỳ đâu ngoài mạng LAN.
+  * Ghép đôi thiết bị ESP32 bằng **mã 6 chữ số** hiển thị trên màn hình LCD mạch.
+  * Đổi tên bot, chọn giọng nói TTS, chỉnh sửa câu lệnh nhân vật (System Prompt).
 
-### 3. Bộ Tool Tích Hợp Miễn Phí 100% (Phản hồi tín hiệu mạch)
-* 💻 **Điều khiển PC (`pc_control`):** Tắt máy, ngủ (Sleep), khởi động lại, khóa màn hình Windows, tăng/giảm âm lượng, mở ứng dụng/web, gửi gói tin **Wake-on-LAN (WOL)** bật nguồn PC khác trong mạng LAN qua địa chỉ MAC.
+### 3. Bộ Tool Tích Hợp Sẵn Miễn Phí 100% (Phản hồi tín hiệu từ mạch)
+* 💻 **Điều khiển PC (`pc_control`):** Tắt máy, ngủ (Sleep), khởi động lại, khóa màn hình Windows, tăng/giảm âm lượng, mở ứng dụng/website, phát gói **Wake-on-LAN (WOL)** bật nguồn các PC khác trong mạng LAN qua địa chỉ MAC.
 * 🌤️ **Thời tiết Free (`free_weather`):** Tích hợp **Open-Meteo**, tự động nhận diện mọi tỉnh thành Việt Nam, cập nhật nhiệt độ/độ ẩm/gió không cần bất kỳ API Key nào.
 * 🔎 **Tìm kiếm Web Free (`free_search`):** Tích hợp **DuckDuckGo Search**, cập nhật tin tức thời gian thực không giới hạn, không cần tài khoản.
 * 🎵 **Nghe nhạc YouTube Free (`free_music`):** Tìm kiếm và trích xuất luồng audio YouTube qua **yt-dlp**, stream trực tiếp về loa ESP32 (nghe nhạc trẻ, remix, lofi, podcast...).
@@ -35,68 +34,33 @@
 
 ## 🚀 Cài Đặt Nhanh (1-Click Install)
 
-### Trên Windows (PowerShell)
-Mở PowerShell và chạy lệnh:
+### Trên Windows
+Mở **PowerShell** và dán dòng lệnh sau:
 ```powershell
 irm https://raw.githubusercontent.com/Neito112/nioh-server/main/scripts/install.ps1 | iex
 ```
+*Script sẽ tự động chuẩn bị môi trường, tạo icon **"Ni-Oh Server"** trên màn hình Desktop và tự mở ứng dụng lên.*
 
-### Trên Linux / macOS / Raspberry Pi / TV Box
-Mở Terminal và chạy lệnh:
-```bash
-curl -fsSL https://raw.githubusercontent.com/Neito112/nioh-server/main/scripts/install.sh | bash
-```
-
----
-
-## 🖥️ Hướng Dẫn Sử Dụng
-
-### 1. Khởi động Giao diện Desktop App (Dashboard 1)
-Chạy lệnh trong thư mục dự án:
-```bash
-python -m server.desktop_app
-```
-Giao diện **Ni-Oh Server Control Center** sẽ tự động mở tại:
-* **URL Cục bộ:** `http://localhost:8001`
-
-Tại đây bạn có thể:
-1. Chọn nhà cung cấp LLM (OpenRouter, DeepSeek, OpenAI...) và dán API Key.
-2. Bấm nút **"Khởi động Server"** -> Cloudflare Tunnel tự động cấp WSS URL.
-3. Bật/tắt các Tool theo mong muốn.
-4. Bấm **"Mở Web Quản Lý Thiết Bị"** để vào Dashboard 2.
-
-### 2. Quản lý Thiết Bị (Dashboard 2 - Web Portal)
-* **Truy cập tại:** `http://localhost:8001/portal` (hoặc qua domain Cloudflare từ điện thoại).
-* **Cách ghép đôi ESP32:**
-  1. Bật nguồn mạch ESP32 đã nạp firmware Ni-Oh.
-  2. Màn hình mạch sẽ hiển thị mã PIN 6 số.
-  3. Nhập 6 số này vào Web Portal và bấm **"Kích hoạt & Ghép đôi"**.
-  4. Mạch lập tức kết nối vào server và bắt đầu trò chuyện.
+### Hoặc Tải Trực Tiếp Về Máy
+1. Tải mã nguồn về máy hoặc chạy:
+   ```bash
+   git clone https://github.com/Neito112/nioh-server.git
+   ```
+2. Nhấp đúp vào file **`Khởi Động Ni-Oh.bat`** để mở giao diện cài đặt!
 
 ---
 
-## ⚙️ Cấu Hình Nâng Cao (.env)
+## 🖥️ Cách Sử Dụng
 
-Các thông số có thể tùy biến trong file `.env`:
-
-```env
-# ── Cấu hình LLM ──
-NIOH_API_KEY=sk-...               # API Key của bạn
-NIOH_LLM_BASE_URL=https://...     # Endpoint OpenAI-compatible
-NIOH_MODEL=deepseek/deepseek-chat  # Tên model
-
-# ── Node Registry (Đồng bộ nhiều máy) ──
-NIOH_GITHUB_TOKEN=ghp_...         # GitHub Token (chỉ cần quyền 'gist')
-NIOH_GIST_ID=                     # Tự sinh sau lần đầu chạy
-NIOH_NODE_ID=node-1               # Tên định danh của máy này
-
-# ── Cloudflare Tunnel ──
-NIOH_CF_DOMAIN=                   # Để trống = dùng trycloudflare.com (free)
-
-# ── Cổng dịch vụ ──
-NIOH_WS_PORT=8000                 # Cổng WebSocket âm thanh
-NIOH_HTTP_PORT=8003               # Cổng OTA Firmware
-```
+1. **Khởi động:** Nhấp đúp vào icon **Ni-Oh Server** trên Desktop (hoặc chạy `Khởi Động Ni-Oh.bat`).
+2. **Cấu hình trên giao diện:**
+   * Chọn nhà cung cấp AI trong danh sách (hoặc chọn Tùy chỉnh).
+   * Dán API Key và bấm **"Lưu Cài Đặt"**.
+   * Bấm **"Khởi động Server"** -> Hệ thống tự động cấp phát địa chỉ WebSocket `wss://...` an toàn qua Cloudflare Tunnel.
+3. **Kết nối mạch ESP32:**
+   * Lấy mã 6 số hiện trên màn hình mạch ESP32.
+   * Bấm nút **"Mở Web Quản Lý Thiết Bị"** trên Dashboard (hoặc vào `http://localhost:8001/portal`).
+   * Nhập mã 6 số để kích hoạt mạch và bắt đầu đàm thoại.
 
 ---
 
@@ -104,13 +68,16 @@ NIOH_HTTP_PORT=8003               # Cổng OTA Firmware
 
 ```
 nioh-server/
+├── Khởi Động Ni-Oh.bat      # File nhấp đúp để chạy server ngay lập tức
+├── run_silent.vbs           # Khởi chạy ngầm không hiện cửa sổ dòng lệnh đen
+├── assets/
+│   └── icon.ico             # Biểu tượng ứng dụng cho Shortcut Desktop
 ├── cloudflare/
 │   └── tunnel.py            # Tự động tải & chạy Cloudflare Tunnel
 ├── server/
 │   ├── desktop_app.py       # Desktop App Dashboard 1 & Web Portal Dashboard 2
-│   ├── main.py              # Entrypoint chạy server dạng daemon/headless
+│   ├── main.py              # Entrypoint server core
 │   ├── ota_server.py        # OTA endpoint trả về danh sách WebSocket cho ESP32
-│   ├── config_patcher.py    # Patch cấu hình động không hardcode key
 │   └── tools/               # Bộ Tool & MCP phản hồi tín hiệu từ mạch
 │       ├── pc_control.py        # Điều khiển PC & Wake-on-LAN
 │       ├── free_weather.py      # Thời tiết Open-Meteo Free
@@ -120,9 +87,9 @@ nioh-server/
 │       └── iot_discovery.py     # Quét mDNS LAN & tạo QR Home Assistant
 ├── sync/
 │   ├── node_registry.py     # Đồng bộ multi-node qua GitHub Gist
-│   └── config_sync.py       # Thứ tự ưu tiên nạp config (env > gist > default)
+│   └── config_sync.py       # Tự động nạp cấu hình hệ thống
 ├── scripts/
-│   ├── install.ps1          # 1-Click Installer cho Windows
+│   ├── install.ps1          # 1-Click Installer Windows (Tự tạo Icon Desktop)
 │   └── install.sh           # 1-Click Installer cho Linux/macOS
 ├── requirements.txt         # Thư viện Python
 └── README.md

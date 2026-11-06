@@ -109,3 +109,4 @@ async def get_weather(location: str = "Hà Nội") -> dict:
         except Exception as e:
             logger.error(f"Lỗi kết nối thời tiết: {e}")
             return {"success": False, "summary": f"Lỗi kết nối dịch vụ thời tiết: {str(e)}"}
+

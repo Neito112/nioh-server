@@ -90,3 +90,4 @@ def _check_port(ip: str, port: int, timeout: float = 0.3) -> bool:
             return s.connect_ex((ip, port)) == 0
     except Exception:
         return False
+

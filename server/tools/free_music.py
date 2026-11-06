@@ -62,3 +62,4 @@ def _extract_audio_url(song_name: str) -> dict:
             "url": entry.get("url"),
             "thumbnail": entry.get("thumbnail"),
         }
+

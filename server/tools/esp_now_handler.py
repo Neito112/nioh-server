@@ -34,3 +34,4 @@ def build_esp_now_packet(action: str, target_device: str, value: str = "") -> di
         "payload": payload,
         "response_text": f"Đã gửi lệnh {action} tới thiết bị {target_device} qua ESP-NOW.",
     }
+
