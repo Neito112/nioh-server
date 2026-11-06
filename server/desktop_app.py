@@ -2,22 +2,21 @@
 Ni-Oh Server Gateway & Portal Application
 -----------------------------------------
 1. DESKTOP APP = CỔNG SERVER (Server Gateway):
-   - Đăng nhập tài khoản liên kết Cloudflare
-   - Kích hoạt cổng server (WebSocket 8000 & OTA 8003)
-   - Tự động XUẤT LINK WEB QUẢN LÝ THIẾT BỊ
+   - Đăng nhập tài khoản liên kết Cloudflare (1-chạm Quick Tunnel, API Token, hoặc Web OAuth)
+   - Kích hoạt cổng server và XUẤT LINK WEB QUẢN LÝ THIẾT BỊ
+   - Cung cấp cổng WSS và OTA cho ESP32
 
 2. WEB PORTAL = QUẢN LÝ THIẾT BỊ:
-   - Đăng nhập tài khoản Google thật qua Google Identity Services
-   - Đăng ký / Đăng nhập tài khoản cá nhân thật lưu vào cơ sở dữ liệu SQLite
+   - Đăng nhập tài khoản Google thật hoặc Đăng ký / Đăng nhập tài khoản cá nhân lưu trữ SQLite
    - Ghép đôi thiết bị bằng MÃ 6 CHỮ SỐ trên màn hình ESP32
-   - Chọn Model AI phù hợp cho từng con bot (DeepSeek V3, Gemini Flash, GPT-4o-mini...)
-   - Cài đặt API Key cá nhân, giọng đọc tiếng Việt, câu lệnh Prompt
+   - Chọn Model AI phù hợp cho từng con bot (DeepSeek V3, Gemini Flash 2.0 Free, GPT-4o Mini...)
+   - Cài đặt API Key cá nhân, giọng đọc tiếng Việt, câu lệnh Prompt nhân cách
 """
 
 import os
 import sys
 
-# Khac phuc loi pythonw.exe tren Windows khi stdout/stderr la None
+# Khắc phục lỗi pythonw.exe trên Windows khi stdout/stderr là None
 if sys.stdout is None:
     sys.stdout = open(os.devnull, "w")
 if sys.stderr is None:
@@ -35,13 +34,19 @@ sys.path.insert(0, BASE_DIR)
 
 from server.gateway_app import (
     HTML_GATEWAY_APP,
+    GATEWAY_STATE,
     api_get_gateway_status,
+    api_link_quick,
+    api_link_token,
+    api_link_key,
     api_start_cloudflare_login,
-    api_check_cloudflare_login,
+    api_unlink_cloudflare,
     api_toggle_gateway
 )
 from server.web_portal import (
     HTML_XIAOZHI_PORTAL,
+    api_portal_get_oauth_config,
+    api_portal_save_oauth_config,
     api_portal_google_auth,
     api_portal_login,
     api_portal_register,
@@ -71,10 +76,18 @@ def open_browser(url: str):
         logger.warning(f"Không thể tự mở trình duyệt: {e}")
 
 
-async def on_startup_open_browser(app):
-    port = app.get("port", 8001)
-    await asyncio.sleep(0.3)
-    open_browser(f"http://localhost:{port}")
+async def handle_ota_request(request):
+    """Endpoint trả về cấu hình OTA cho ESP32 khi kết nối qua Cloudflare."""
+    ws_url = GATEWAY_STATE.get("wss_url", f"ws://localhost:{request.app['port']}/xiaozhi/v1/")
+    return web.json_response({
+        "firmware": {
+            "version": os.environ.get("NIOH_FIRMWARE_VERSION", "2.5.3"),
+            "url": os.environ.get("NIOH_FIRMWARE_URL", "")
+        },
+        "websocket": {
+            "url": ws_url
+        }
+    })
 
 
 def create_application(port: int = 8001):
@@ -84,18 +97,26 @@ def create_application(port: int = 8001):
     # ── 1. CỔNG SERVER (Desktop App) ─────────────────────────
     app.router.add_get("/", lambda req: web.Response(text=HTML_GATEWAY_APP, content_type="text/html"))
     app.router.add_get("/api/gateway/status", api_get_gateway_status)
+    app.router.add_post("/api/gateway/cf-link-quick", api_link_quick)
+    app.router.add_post("/api/gateway/cf-link-token", api_link_token)
+    app.router.add_post("/api/gateway/cf-link-key", api_link_key)
     app.router.add_post("/api/gateway/cf-start-login", api_start_cloudflare_login)
-    app.router.add_get("/api/gateway/cf-check-login", api_check_cloudflare_login)
+    app.router.add_post("/api/gateway/cf-unlink", api_unlink_cloudflare)
     app.router.add_post("/api/gateway/toggle", api_toggle_gateway)
 
     # ── 2. WEB PORTAL QUẢN LÝ THIẾT BỊ ──────────────────────
     app.router.add_get("/portal", lambda req: web.Response(text=HTML_XIAOZHI_PORTAL, content_type="text/html"))
+    app.router.add_get("/api/portal/oauth-config", api_portal_get_oauth_config)
+    app.router.add_post("/api/portal/oauth-config", api_portal_save_oauth_config)
     app.router.add_post("/api/portal/auth-google", api_portal_google_auth)
     app.router.add_post("/api/portal/login", api_portal_login)
     app.router.add_post("/api/portal/register", api_portal_register)
     app.router.add_get("/api/portal/devices", api_portal_get_devices)
     app.router.add_post("/api/portal/bind", api_portal_bind_device)
     app.router.add_post("/api/portal/update-device", api_portal_update_device)
+
+    # ── 3. CỔNG OTA CHO ESP32 QUA CLOUDFLARE ─────────────────
+    app.router.add_get("/xiaozhi/ota/", handle_ota_request)
 
     return app
 
@@ -120,14 +141,8 @@ async def run_server(port: int = 8001):
         logger.error(f"Lỗi khởi chạy máy chủ: {e}")
 
 
-
-
 if __name__ == "__main__":
     try:
         asyncio.run(run_server(8001))
     except KeyboardInterrupt:
         pass
-
-
-
-
