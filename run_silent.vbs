@@ -13,3 +13,4 @@ ElseIf objFSO.FileExists(strFolder & "\.venv\Scripts\python.exe") Then
 Else
     WshShell.Run "pythonw -m server.desktop_app", 0, False
 End If
+

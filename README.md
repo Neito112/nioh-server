@@ -1,101 +1,96 @@
-# Ni-Oh Server & Control Center
+# Ni-Oh Server & Device Portal
 
-> **Hệ sinh thái máy chủ giọng nói AI phân tán tương thích Xiaozhi ESP32.**  
-> Ứng dụng Desktop có biểu tượng (Icon) kích hoạt trực tiếp — **toàn bộ cài đặt được quản lý 100% trên giao diện đồ họa trực quan, KHÔNG cần mở code hay sửa file cấu hình thủ công!**
-
----
-
-## 🌟 Tính Năng Nổi Bật
-
-### 1. Kích Hoạt 1 Chạm & Cấu Hình Trên Giao Diện (Zero-Code Setup)
-* **Icon Desktop Tiện Lợi:** Sau khi cài đặt, tự động tạo biểu tượng **"Ni-Oh Server"** ngay trên màn hình Desktop. Chỉ cần nhấp đúp là khởi chạy ngầm, tự mở giao diện điều khiển.
-* **Không Đụng File Code:** Toàn bộ việc chọn Provider (OpenRouter, DeepSeek, OpenAI, Groq, Ollama...), dán API Key, chọn Model, đổi cổng, bật/tắt Cloudflare Tunnel... đều thực hiện bằng chuột trên Dashboard.
-* **File khởi động nhanh:** Trong thư mục có sẵn file `Khởi Động Ni-Oh.bat` tiện lợi cho mọi người dùng.
-
-### 2. Mô Hình 2 Dashboard Tách Biệt
-* **Dashboard 1: Desktop App (Server Host Control Center):**
-  * Quản trị hạ tầng máy chủ: Xem trạng thái Server, URL WebSocket, Endpoint OTA.
-  * Tùy chọn nhà cung cấp AI không bị khóa cứng (hỗ trợ mọi endpoint OpenAI-compatible).
-  * Công tắc gạt (Toggle) bật/tắt toàn bộ các công cụ & MCP.
-* **Dashboard 2: Web Portal (Quản lý Thiết bị - Thay thế xiaozhi.me):**
-  * Truy cập được từ điện thoại, tablet ở bất kỳ đâu ngoài mạng LAN.
-  * Ghép đôi thiết bị ESP32 bằng **mã 6 chữ số** hiển thị trên màn hình LCD mạch.
-  * Đổi tên bot, chọn giọng nói TTS, chỉnh sửa câu lệnh nhân vật (System Prompt).
-
-### 3. Bộ Tool Tích Hợp Sẵn Miễn Phí 100% (Phản hồi tín hiệu từ mạch)
-* 💻 **Điều khiển PC (`pc_control`):** Tắt máy, ngủ (Sleep), khởi động lại, khóa màn hình Windows, tăng/giảm âm lượng, mở ứng dụng/website, phát gói **Wake-on-LAN (WOL)** bật nguồn các PC khác trong mạng LAN qua địa chỉ MAC.
-* 🌤️ **Thời tiết Free (`free_weather`):** Tích hợp **Open-Meteo**, tự động nhận diện mọi tỉnh thành Việt Nam, cập nhật nhiệt độ/độ ẩm/gió không cần bất kỳ API Key nào.
-* 🔎 **Tìm kiếm Web Free (`free_search`):** Tích hợp **DuckDuckGo Search**, cập nhật tin tức thời gian thực không giới hạn, không cần tài khoản.
-* 🎵 **Nghe nhạc YouTube Free (`free_music`):** Tìm kiếm và trích xuất luồng audio YouTube qua **yt-dlp**, stream trực tiếp về loa ESP32 (nghe nhạc trẻ, remix, lofi, podcast...).
-* 📡 **Giao tiếp ESP-NOW (`esp_now`):** Đóng gói lệnh JSON gửi ngược về ESP32 để chip phần cứng phát sóng 2.4GHz điều khiển các công tắc phụ không dây.
-* 🏠 **Quét mạng LAN IoT (`smart_home`):** Tự động quét mDNS phát hiện Home Assistant nội bộ, sinh mã QR để quét bằng điện thoại và nhập Access Token.
+> **Hệ thống Cổng Server AI phân tán & Web Quản lý thiết bị tương thích Xiaozhi ESP32.**  
+> Chuẩn hóa theo mô hình 2 tầng độc lập:
+> 1. **Desktop App = CỔNG SERVER:** Đăng nhập liên kết Cloudflare để kích hoạt cổng và **XUẤT RA LINK WEB**.
+> 2. **Web Portal = QUẢN LÝ THIẾT BỊ (Y hệt xiaozhi.me):** Đăng nhập tài khoản cá nhân qua **Google / Zalo**, ghép đôi bằng **mã 6 chữ số**, chọn Model AI phù hợp cho từng con bot.
 
 ---
 
-## 🚀 Cài Đặt Nhanh (1-Click Install)
+## 🏗️ Kiến Trúc Hệ Thống
+
+```
+┌────────────────────────────────────────────────────────┐
+│             1. DESKTOP APP = CỔNG SERVER               │
+│  - Người dùng: Người vận hành / Chủ trạm server        │
+│  - Đăng nhập: Tài khoản CLOUDFLARE                     │
+│  - Chức năng: Kích hoạt tunnel, mở cổng WebSocket/OTA  │
+│  - Kết quả: Tự động XUẤT RA LINK WEB QUẢN LÝ           │
+└───────────────────────────┬────────────────────────────┘
+                            │
+               Xuất ra Public Web Portal
+                            │
+                            ▼
+┌────────────────────────────────────────────────────────┐
+│       2. TRANG WEB QUẢN LÝ THIẾT BỊ (Y HỆT XIAOZHI.ME) │
+│  - Người dùng: Bất kỳ ai sở hữu con bot ESP32          │
+│  - Đăng nhập: Tài khoản cá nhân qua GOOGLE hoặc ZALO   │
+│  - Chức năng:                                          │
+│    + Ghép đôi mạch bằng MÃ 6 CHỮ SỐ trên màn hình      │
+│    + Chọn Model AI (Menu chọn các model phù hợp)       │
+│    + Nhập API Key cá nhân của người dùng               │
+│    + Chọn Giọng nói (TTS), Cài đặt tính cách (Prompt)  │
+│    + Xem trạng thái Online/Offline của thiết bị        │
+└───────────────────────────▲────────────────────────────┘
+                            │
+                   Cấu hình đồng bộ xuống
+                            │
+┌───────────────────────────┴────────────────────────────┐
+│                    3. MẠCH ESP32                       │
+│  - Bật nguồn: Hiện mã 6 số                             │
+│  - Kết nối âm thanh trực tiếp về CỔNG SERVER (App)     │
+└────────────────────────────────────────────────────────┘
+```
+
+---
+
+## 🚀 Cài Đặt Nhanh (1-Click)
 
 ### Trên Windows
-Mở **PowerShell** và dán dòng lệnh sau:
+Mở **PowerShell** và chạy:
 ```powershell
 irm https://raw.githubusercontent.com/Neito112/nioh-server/main/scripts/install.ps1 | iex
 ```
-*Script sẽ tự động chuẩn bị môi trường, tạo icon **"Ni-Oh Server"** trên màn hình Desktop và tự mở ứng dụng lên.*
+*Script tự động cài đặt và tạo icon **"Ni-Oh Server"** trên màn hình Desktop.*
 
-### Hoặc Tải Trực Tiếp Về Máy
-1. Tải mã nguồn về máy hoặc chạy:
-   ```bash
-   git clone https://github.com/Neito112/nioh-server.git
-   ```
-2. Nhấp đúp vào file **`Khởi Động Ni-Oh.bat`** để mở giao diện cài đặt!
+Hoặc tải repo về và nhấp đúp file: **`Khởi Động Ni-Oh.bat`**.
 
 ---
 
-## 🖥️ Cách Sử Dụng
+## 🖥️ Hướng Dẫn Vận Hành
 
-1. **Khởi động:** Nhấp đúp vào icon **Ni-Oh Server** trên Desktop (hoặc chạy `Khởi Động Ni-Oh.bat`).
-2. **Cấu hình trên giao diện:**
-   * Chọn nhà cung cấp AI trong danh sách (hoặc chọn Tùy chỉnh).
-   * Dán API Key và bấm **"Lưu Cài Đặt"**.
-   * Bấm **"Khởi động Server"** -> Hệ thống tự động cấp phát địa chỉ WebSocket `wss://...` an toàn qua Cloudflare Tunnel.
-3. **Kết nối mạch ESP32:**
-   * Lấy mã 6 số hiện trên màn hình mạch ESP32.
-   * Bấm nút **"Mở Web Quản Lý Thiết Bị"** trên Dashboard (hoặc vào `http://localhost:8001/portal`).
-   * Nhập mã 6 số để kích hoạt mạch và bắt đầu đàm thoại.
+### Bước 1: Vận hành Cổng Server (Desktop App)
+1. Mở icon **Ni-Oh Server** trên Desktop.
+2. Nhập thông tin tài khoản Cloudflare (Token / Account).
+3. Nhấp nút **"BẬT CỔNG SERVER & XUẤT LINK WEB"**:
+   * Hệ thống tự động kích hoạt Cloudflare Tunnel.
+   * **Xuất ra đường link Web Quản Lý Thiết Bị** (Ví dụ: `https://xxxx.trycloudflare.com/portal`).
+   * Bạn chỉ cần sao chép link này chia sẻ cho người dùng hoặc tự truy cập.
 
----
-
-## 📂 Cấu Trúc Dự Án
-
-```
-nioh-server/
-├── Khởi Động Ni-Oh.bat      # File nhấp đúp để chạy server ngay lập tức
-├── run_silent.vbs           # Khởi chạy ngầm không hiện cửa sổ dòng lệnh đen
-├── assets/
-│   └── icon.ico             # Biểu tượng ứng dụng cho Shortcut Desktop
-├── cloudflare/
-│   └── tunnel.py            # Tự động tải & chạy Cloudflare Tunnel
-├── server/
-│   ├── desktop_app.py       # Desktop App Dashboard 1 & Web Portal Dashboard 2
-│   ├── main.py              # Entrypoint server core
-│   ├── ota_server.py        # OTA endpoint trả về danh sách WebSocket cho ESP32
-│   └── tools/               # Bộ Tool & MCP phản hồi tín hiệu từ mạch
-│       ├── pc_control.py        # Điều khiển PC & Wake-on-LAN
-│       ├── free_weather.py      # Thời tiết Open-Meteo Free
-│       ├── free_search.py       # Tìm kiếm DuckDuckGo Free
-│       ├── free_music.py        # Stream nhạc YouTube yt-dlp Free
-│       ├── esp_now_handler.py   # Đóng gói frame lệnh ESP-NOW
-│       └── iot_discovery.py     # Quét mDNS LAN & tạo QR Home Assistant
-├── sync/
-│   ├── node_registry.py     # Đồng bộ multi-node qua GitHub Gist
-│   └── config_sync.py       # Tự động nạp cấu hình hệ thống
-├── scripts/
-│   ├── install.ps1          # 1-Click Installer Windows (Tự tạo Icon Desktop)
-│   └── install.sh           # 1-Click Installer cho Linux/macOS
-├── requirements.txt         # Thư viện Python
-└── README.md
-```
+### Bước 2: Quản lý thiết bị trên Web Portal (Người dùng)
+1. Truy cập vào link web vừa xuất ra từ bất kỳ đâu (điện thoại hoặc máy tính).
+2. Bấm **"Đăng nhập bằng Google"** hoặc **"Đăng nhập bằng Zalo"**.
+3. Bấm nút **"+ Thêm Thiết Bị Mới"**:
+   * Nhập **mã 6 chữ số** đang hiện trên màn hình mạch ESP32.
+   * Thiết bị sẽ được gán ngay vào tài khoản cá nhân của bạn.
+4. Nhấp vào con bot để cấu hình:
+   * **Chọn Model AI:** Menu chọn sẵn các model tối ưu (DeepSeek V3, Gemini Flash 2.0 Free, GPT-4o-mini, Claude 3.5 Sonnet...).
+   * **API Key:** Tùy chọn nhập key riêng của bạn.
+   * **Giọng đọc:** Chọn giọng Hoài My, Nam Minh, Ban Mai...
+   * **Tính cách:** Cài đặt Prompt xưng hô và phong cách trò chuyện.
 
 ---
 
-## 📄 Bản Quyền & Giấy Phép
-Phát hành theo giấy phép MIT. Phát triển dựa trên nền tảng kiến trúc mở tương thích với Xiaozhi ESP32.
+## 🛠️ Bộ Tool & MCP Tích Hợp Miễn Phí (Phản Hồi Mạch)
+
+* 💻 **Điều khiển PC:** Tắt máy, ngủ, khóa màn hình, volume, Wake-on-LAN bật máy qua card mạng.
+* 🌤️ **Thời tiết Free:** Open-Meteo cập nhật toàn bộ tỉnh thành Việt Nam không cần key.
+* 🔎 **Tìm kiếm Web Free:** DuckDuckGo Search tra cứu tin tức thời gian thực không cần key.
+* 🎵 **Nghe nhạc YouTube Free:** Stream âm thanh YouTube qua `yt-dlp`.
+* 📡 **Giao tiếp ESP-NOW:** Đóng gói lệnh vô tuyến 2.4GHz bắn về mạch ESP32 điều khiển công tắc phụ.
+* 🏠 **Quét mạng LAN IoT:** Tự động quét mDNS phát hiện Home Assistant & sinh mã QR kết nối.
+
+---
+
+## 📄 Bản Quyền
+Phát hành theo giấy phép MIT. Mã nguồn lưu trữ tại [Neito112/nioh-server](https://github.com/Neito112/nioh-server).
