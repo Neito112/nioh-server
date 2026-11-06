@@ -3,6 +3,8 @@ Ni-Oh Server Engine & Desktop Application (Dashboard 1)
 ------------------------------------------------------
 Giao diện Desktop App quản lý máy chủ tổng (Server Host Dashboard):
 - 100% cấu hình trực quan trên giao diện, KHÔNG CẦN CHỈNH FILE .ENV
+- Danh sách Model chọn lọc chuyên dụng cho trợ lý giọng nói (Voice Assistant)
+- Hỗ trợ nút tự động tải danh sách Model thực tế từ API Key của người dùng
 - Không khóa cứng OpenRouter (hỗ trợ DeepSeek, OpenAI, Groq, Ollama...)
 - Bật/tắt Cloudflare Tunnel chỉ với 1 click
 - Bảng công tắc Toggle bật/tắt toàn bộ các Tools (PC Control, Weather, Search, Music, ESP-NOW, Smart Home)
@@ -15,6 +17,7 @@ import json
 import asyncio
 import logging
 import webbrowser
+import aiohttp
 from aiohttp import web
 from dotenv import load_dotenv
 
@@ -81,6 +84,33 @@ async def api_save_config(request):
 
     _save_to_env()
     return web.json_response({"success": True, "message": "Đã lưu cài đặt trực tiếp vào hệ thống!"})
+
+
+async def api_fetch_live_models(request):
+    """Lấy danh sách model thực tế từ API endpoint bằng API Key của người dùng."""
+    data = await request.json()
+    base_url = data.get("base_url", "").rstrip("/")
+    api_key = data.get("api_key", "").strip()
+
+    if not base_url:
+        return web.json_response({"success": False, "message": "Vui lòng nhập API Base URL!"})
+
+    models_endpoint = f"{base_url}/models"
+    headers = {"Authorization": f"Bearer {api_key}"} if api_key else {}
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(models_endpoint, headers=headers, timeout=6) as resp:
+                if resp.status == 200:
+                    result = await resp.json()
+                    models_data = result.get("data", [])
+                    model_ids = [m.get("id") for m in models_data if isinstance(m, dict) and "id" in m]
+                    return web.json_response({"success": True, "models": sorted(model_ids)})
+                else:
+                    return web.json_response({"success": False, "message": f"Máy chủ API báo lỗi {resp.status}."})
+    except Exception as e:
+        logger.warning(f"Lỗi lấy model từ {models_endpoint}: {e}")
+        return web.json_response({"success": False, "message": f"Không thể lấy danh sách từ API: {str(e)}"})
 
 
 async def api_toggle_server(request):
@@ -181,6 +211,7 @@ HTML_DESKTOP_DASHBOARD = """<!DOCTYPE html>
         .card-title { font-size: 15px; font-weight: 700; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; color: #e2e8f0; }
         .btn { background: var(--accent); color: #0b0f19; border: none; padding: 10px 18px; border-radius: 8px; font-weight: 700; cursor: pointer; transition: 0.2s; font-size: 14px; }
         .btn:hover { filter: brightness(1.1); }
+        .btn-sm { padding: 6px 12px; font-size: 12px; border-radius: 6px; }
         .btn-danger { background: var(--danger); color: white; }
         .btn-portal { background: #8b5cf6; color: white; }
         .input-group { margin-bottom: 14px; }
@@ -192,6 +223,7 @@ HTML_DESKTOP_DASHBOARD = """<!DOCTYPE html>
         .status-online { color: var(--success); font-weight: bold; }
         .status-offline { color: var(--danger); font-weight: bold; }
         .collapsible-header { cursor: pointer; user-select: none; color: var(--accent); font-size: 13px; margin-top: 10px; display: inline-block; }
+        .label-row { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
     </style>
 </head>
 <body>
@@ -207,7 +239,7 @@ HTML_DESKTOP_DASHBOARD = """<!DOCTYPE html>
     </div>
 
     <div class="grid">
-        <!-- Cột 1: Cấu hình LLM & Tài khoản -->
+        <!-- Cột 1: Cấu hình LLM & Chọn Model Chuyên Dụng -->
         <div class="card">
             <div class="card-title">🤖 Cấu hình Trí Tuệ Nhân Tạo (AI Engine)</div>
             
@@ -219,28 +251,43 @@ HTML_DESKTOP_DASHBOARD = """<!DOCTYPE html>
             <div class="input-group">
                 <label>Nhà cung cấp AI (Provider)</label>
                 <select id="providerSelect" onchange="onProviderChange()">
-                    <option value="openrouter">OpenRouter (100+ Models)</option>
+                    <option value="openrouter">OpenRouter (Kho 100+ Models)</option>
                     <option value="deepseek">DeepSeek (Chính thức)</option>
                     <option value="openai">OpenAI (ChatGPT)</option>
-                    <option value="groq">Groq (Siêu tốc độ)</option>
-                    <option value="ollama">Ollama (Chạy Offline tại nhà)</option>
+                    <option value="groq">Groq (Siêu tốc độ - Độ trễ cực thấp)</option>
+                    <option value="ollama">Ollama (Chạy Offline nội bộ)</option>
                     <option value="custom">Tùy chỉnh (OpenAI-compatible)</option>
                 </select>
             </div>
+            
             <div class="input-group">
                 <label>API Base URL</label>
                 <input type="text" id="baseUrlInput" placeholder="https://openrouter.ai/api/v1">
             </div>
+
             <div class="input-group">
-                <label>API Key (Mọi nhà mạng)</label>
+                <div class="label-row">
+                    <label>API Key</label>
+                    <button class="btn btn-sm" style="background: #1e293b; color: var(--accent);" onclick="fetchLiveModels()">🔄 Quét Model từ Key</button>
+                </div>
                 <input type="password" id="apiKeyInput" placeholder="Dán API Key của bạn vào đây">
             </div>
+
+            <!-- CHỌN MODEL TỪ DANH SÁCH PHÙ HỢP -->
             <div class="input-group">
-                <label>Tên Model</label>
-                <input type="text" id="modelInput" placeholder="deepseek/deepseek-chat">
+                <label>Mô hình AI (Chọn từ danh sách phù hợp nhất):</label>
+                <select id="modelSelect" onchange="onModelSelectChange()">
+                    <!-- Sẽ được điền tự động qua JavaScript -->
+                </select>
             </div>
 
-            <!-- Cài đặt nâng cao ẩn hiện -->
+            <!-- Ô nhập tay dự phòng (chỉ hiện khi chọn 'Khác') -->
+            <div class="input-group" id="customModelGroup" style="display: none;">
+                <label>Nhập tên Model thủ công:</label>
+                <input type="text" id="modelCustomInput" placeholder="ví dụ: meta-llama/llama-3.2-3b-instruct">
+            </div>
+
+            <!-- Cài đặt nâng cao -->
             <span class="collapsible-header" onclick="toggleAdvanced()">⚙️ Cài đặt đồng bộ & Domain nâng cao ▼</span>
             <div id="advancedSection" style="display: none; margin-top: 12px; padding-top: 12px; border-top: 1px dashed var(--border);">
                 <div class="input-group">
@@ -322,26 +369,149 @@ HTML_DESKTOP_DASHBOARD = """<!DOCTYPE html>
     </div>
 
     <script>
-        const PRESETS = {
-            openrouter: { url: "https://openrouter.ai/api/v1", model: "deepseek/deepseek-chat" },
-            deepseek: { url: "https://api.deepseek.com/v1", model: "deepseek-chat" },
-            openai: { url: "https://api.openai.com/v1", model: "gpt-4o-mini" },
-            groq: { url: "https://api.groq.com/openai/v1", model: "llama-3.3-70b-versatile" },
-            ollama: { url: "http://localhost:11434/v1", model: "qwen2.5:7b" },
-            custom: { url: "", model: "" }
+        // Danh mục Model chọn lọc chuẩn chuyên cho Trợ lý giọng nói (Tối ưu tốc độ, Tiếng Việt, giá rẻ)
+        const CURATED_MODELS = {
+            openrouter: [
+                { id: "deepseek/deepseek-chat", name: "⭐ DeepSeek V3 (Khuyên dùng: Nhanh, Siêu rẻ, Tiếng Việt đỉnh)" },
+                { id: "google/gemini-2.0-flash:free", name: "🎁 Google Gemini 2.0 Flash (FREE 100%, Siêu tốc độ)" },
+                { id: "openai/gpt-4o-mini", name: "⚡ GPT-4o Mini (Phản hồi cực nhanh, ổn định)" },
+                { id: "meta-llama/llama-3.3-70b-instruct", name: "🧠 Llama 3.3 70B (Mạnh mẽ, thông minh)" },
+                { id: "anthropic/claude-3.5-sonnet", name: "👑 Claude 3.5 Sonnet (Xử lý thông minh nhất)" },
+                { id: "deepseek/deepseek-r1", name: "🔬 DeepSeek R1 (Lý luận & suy nghĩ sâu)" },
+                { id: "custom", name: "✏️ Khác (Nhập tên model thủ công)..." }
+            ],
+            deepseek: [
+                { id: "deepseek-chat", name: "⭐ DeepSeek V3 (Chính thức - Khuyên dùng)" },
+                { id: "deepseek-reasoner", name: "🔬 DeepSeek R1 (Suy luận sâu)" },
+                { id: "custom", name: "✏️ Khác (Nhập tên model thủ công)..." }
+            ],
+            openai: [
+                { id: "gpt-4o-mini", name: "⭐ GPT-4o Mini (Tối ưu tốc độ & đàm thoại)" },
+                { id: "gpt-4o", name: "👑 GPT-4o Đầy Đủ" },
+                { id: "gpt-3.5-turbo", name: "⚡ GPT-3.5 Turbo" },
+                { id: "custom", name: "✏️ Khác (Nhập tên model thủ công)..." }
+            ],
+            groq: [
+                { id: "llama-3.3-70b-versatile", name: "⭐ Llama 3.3 70B (Siêu tốc ~300 tokens/s)" },
+                { id: "llama-3.1-8b-instant", name: "⚡ Llama 3.1 8B (Độ trễ gần như số 0)" },
+                { id: "mixtral-8x7b-32768", name: "🌀 Mixtral 8x7B" },
+                { id: "custom", name: "✏️ Khác (Nhập tên model thủ công)..." }
+            ],
+            ollama: [
+                { id: "qwen2.5:7b", name: "⭐ Qwen 2.5 7B (Khuyên dùng: Hỗ trợ tiếng Việt tốt nhất)" },
+                { id: "llama3.2:3b", name: "⚡ Llama 3.2 3B (Siêu nhẹ cho máy yếu)" },
+                { id: "gemma2:9b", name: "💎 Google Gemma 2 9B" },
+                { id: "custom", name: "✏️ Khác (Nhập tên model thủ công)..." }
+            ],
+            custom: [
+                { id: "custom", name: "✏️ Nhập tên model của bạn..." }
+            ]
         };
+
+        const PRESET_URLS = {
+            openrouter: "https://openrouter.ai/api/v1",
+            deepseek: "https://api.deepseek.com/v1",
+            openai: "https://api.openai.com/v1",
+            groq: "https://api.groq.com/openai/v1",
+            ollama: "http://localhost:11434/v1",
+            custom: ""
+        };
+
+        function populateModelSelect(provider, selectedModel) {
+            const select = document.getElementById('modelSelect');
+            const models = CURATED_MODELS[provider] || CURATED_MODELS.custom;
+            select.innerHTML = "";
+
+            let found = false;
+            models.forEach(m => {
+                const opt = document.createElement('option');
+                opt.value = m.id;
+                opt.innerText = m.name;
+                if (m.id === selectedModel) {
+                    opt.selected = true;
+                    found = true;
+                }
+                select.appendChild(opt);
+            });
+
+            // Nếu model đang lưu không nằm trong list có sẵn, gán vào custom
+            const customGroup = document.getElementById('customModelGroup');
+            const customInput = document.getElementById('modelCustomInput');
+            if (!found && selectedModel) {
+                select.value = "custom";
+                customGroup.style.display = "block";
+                customInput.value = selectedModel;
+            } else if (select.value === "custom") {
+                customGroup.style.display = "block";
+                customInput.value = selectedModel || "";
+            } else {
+                customGroup.style.display = "none";
+            }
+        }
+
+        function onModelSelectChange() {
+            const select = document.getElementById('modelSelect');
+            const customGroup = document.getElementById('customModelGroup');
+            if (select.value === "custom") {
+                customGroup.style.display = "block";
+            } else {
+                customGroup.style.display = "none";
+            }
+        }
+
+        function onProviderChange() {
+            const provider = document.getElementById('providerSelect').value;
+            if (PRESET_URLS[provider] !== undefined && PRESET_URLS[provider] !== "") {
+                document.getElementById('baseUrlInput').value = PRESET_URLS[provider];
+            }
+            populateModelSelect(provider, null);
+        }
+
+        async function fetchLiveModels() {
+            const baseUrl = document.getElementById('baseUrlInput').value;
+            const apiKey = document.getElementById('apiKeyInput').value;
+            if (!baseUrl) { alert("Vui lòng nhập API Base URL trước!"); return; }
+
+            const res = await fetch('/api/models/live', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ base_url: baseUrl, api_key: apiKey })
+            });
+            const data = await res.json();
+            if (data.success && data.models.length > 0) {
+                const select = document.getElementById('modelSelect');
+                select.innerHTML = "";
+                data.models.forEach(id => {
+                    const opt = document.createElement('option');
+                    opt.value = id;
+                    opt.innerText = id;
+                    select.appendChild(opt);
+                });
+                const customOpt = document.createElement('option');
+                customOpt.value = "custom";
+                customOpt.innerText = "✏️ Khác (Nhập tên thủ công)...";
+                select.appendChild(customOpt);
+                alert(`Đã quét thấy ${data.models.length} model từ tài khoản của bạn!`);
+            } else {
+                alert(data.message || "Không thể quét danh sách model.");
+            }
+        }
 
         async function loadStatus() {
             const res = await fetch('/api/status');
             const data = await res.json();
             document.getElementById('hostAccountDisplay').innerText = "Host: " + (data.host_account || "admin@nioh.local");
             document.getElementById('hostAccountInput').value = data.host_account || "";
-            document.getElementById('providerSelect').value = data.llm_provider || 'openrouter';
+            
+            const provider = data.llm_provider || 'openrouter';
+            document.getElementById('providerSelect').value = provider;
             document.getElementById('baseUrlInput').value = data.llm_base_url || "";
             document.getElementById('apiKeyInput').value = data.llm_api_key || "";
-            document.getElementById('modelInput').value = data.llm_model || "";
             document.getElementById('githubTokenInput').value = data.github_token || "";
             document.getElementById('customDomainInput').value = data.custom_domain || "";
+
+            // Populate danh sách model phù hợp
+            populateModelSelect(provider, data.llm_model);
 
             const isRun = data.server_running;
             const statusTxt = document.getElementById('serverStatusText');
@@ -359,26 +529,23 @@ HTML_DESKTOP_DASHBOARD = """<!DOCTYPE html>
             }
         }
 
-        function onProviderChange() {
-            const val = document.getElementById('providerSelect').value;
-            if (PRESETS[val]) {
-                document.getElementById('baseUrlInput').value = PRESETS[val].url;
-                if (PRESETS[val].model) document.getElementById('modelInput').value = PRESETS[val].model;
-            }
-        }
-
         function toggleAdvanced() {
             const el = document.getElementById('advancedSection');
             el.style.display = (el.style.display === 'none') ? 'block' : 'none';
         }
 
         async function saveConfig() {
+            let selectedModel = document.getElementById('modelSelect').value;
+            if (selectedModel === "custom") {
+                selectedModel = document.getElementById('modelCustomInput').value.trim();
+            }
+
             const payload = {
                 host_account: document.getElementById('hostAccountInput').value,
                 provider: document.getElementById('providerSelect').value,
                 base_url: document.getElementById('baseUrlInput').value,
                 api_key: document.getElementById('apiKeyInput').value,
-                model: document.getElementById('modelInput').value,
+                model: selectedModel,
                 github_token: document.getElementById('githubTokenInput').value,
                 custom_domain: document.getElementById('customDomainInput').value
             };
@@ -523,6 +690,7 @@ def create_desktop_app():
 
     app.router.add_get("/api/status", api_get_status)
     app.router.add_post("/api/config", api_save_config)
+    app.router.add_post("/api/models/live", api_fetch_live_models)
     app.router.add_post("/api/server/toggle", api_toggle_server)
     app.router.add_get("/api/iot/scan", api_scan_iot)
     app.router.add_post("/api/portal/bind", api_device_bind)
