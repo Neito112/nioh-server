@@ -204,3 +204,4 @@ if ($start -eq "y") {
     Write-Info "Đang khởi động..."
     Start-Process powershell -ArgumentList "-ExecutionPolicy Bypass -File `"$startScript`"" -WindowStyle Normal
 }
+

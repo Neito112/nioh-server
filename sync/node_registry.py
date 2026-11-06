@@ -183,3 +183,4 @@ def _append_env(key: str, value: str):
     lines.append(f"{key}={value}\n")
     with open(env_file, "w", encoding="utf-8") as f:
         f.writelines(lines)
+

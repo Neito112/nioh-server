@@ -64,3 +64,4 @@ async def load_nioh_config() -> dict:
     }
 
     return cfg, registry
+

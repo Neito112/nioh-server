@@ -58,3 +58,4 @@ def _patch_yaml_key(content: str, key: str, value: str) -> str:
     replacement = rf'\g<1>{value}'
     new_content = re.sub(pattern, replacement, content, flags=re.MULTILINE)
     return new_content
+

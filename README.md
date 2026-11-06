@@ -116,3 +116,4 @@ Flash firmware và nhập OTA URL vào cấu hình Ni-Oh firmware.
 ## License
 
 MIT — dựa trên [xinnan-tech/xiaozhi-esp32-server](https://github.com/xinnan-tech/xiaozhi-esp32-server)
+
