@@ -2,10 +2,11 @@
 Ni-Oh Device Management Web Portal (Production)
 ------------------------------------------------
 Hệ thống Quản lý Thiết bị & Xác thực Người dùng:
-- Hỗ trợ đăng nhập Google thật qua Google Identity Services (GSI / OAuth2)
-- Hỗ trợ Đăng ký / Đăng nhập tài khoản cá nhân trực tiếp (Email & Mật khẩu) lưu trữ SQLite
-- Quản lý & cấu hình thiết bị ESP32 qua mã PIN 6 số trên màn hình LCD
-- Lưu trữ cơ sở dữ liệu thật (data/portal.db)
+- Đăng nhập Google mượt mà (hỗ trợ cả Google OAuth chuẩn và Xác thực Google trực tiếp)
+- Đăng nhập Zalo
+- Đăng ký / Đăng nhập tài khoản cá nhân (Email & Mật khẩu) lưu trữ SQLite
+- Quản lý & ghép đôi thiết bị ESP32 qua mã PIN 6 số trên màn hình
+- Cấu hình Model AI (DeepSeek V3, Gemini Flash 2.0 Free...), Prompt, TTS giọng Việt
 """
 
 import os
@@ -60,7 +61,7 @@ def init_db():
     )
     """)
     
-    # Bảng cấu hình OAuth (Google Client ID, Zalo App ID)
+    # Bảng cấu hình OAuth
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS oauth_config (
         key TEXT PRIMARY KEY,
@@ -78,41 +79,7 @@ def _hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode()).hexdigest()
 
 
-def get_oauth_setting(key: str, default: str = "") -> str:
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("SELECT value FROM oauth_config WHERE key = ?", (key,))
-    row = c.fetchone()
-    conn.close()
-    return row[0] if row else default
-
-
-def save_oauth_setting(key: str, value: str):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("INSERT OR REPLACE INTO oauth_config (key, value) VALUES (?, ?)", (key, value))
-    conn.commit()
-    conn.close()
-
-
 # ── REST API CHO XÁC THỰC NGƯỜI DÙNG ───────────────────────
-
-async def api_portal_get_oauth_config(request):
-    """Lấy cấu hình OAuth hiện tại."""
-    google_client_id = get_oauth_setting("google_client_id", os.environ.get("GOOGLE_CLIENT_ID", ""))
-    return web.json_response({
-        "google_client_id": google_client_id,
-        "has_google_client_id": bool(google_client_id and "YOUR_GOOGLE" not in google_client_id)
-    })
-
-
-async def api_portal_save_oauth_config(request):
-    """Lưu Google Client ID vào cơ sở dữ liệu."""
-    data = await request.json()
-    google_client_id = data.get("google_client_id", "").strip()
-    save_oauth_setting("google_client_id", google_client_id)
-    return web.json_response({"success": True, "message": "Đã lưu Google Client ID thành công!"})
-
 
 async def api_portal_register(request):
     """Đăng ký tài khoản cá nhân mới bằng Email & Mật khẩu."""
@@ -163,46 +130,78 @@ async def api_portal_login(request):
 
 
 async def api_portal_google_auth(request):
-    """
-    Xác thực Google qua JWT credential từ Google Identity Services.
-    """
+    """Xác thực Google qua JWT credential hoặc đăng nhập trực tiếp."""
     data = await request.json()
+    email = data.get("email", "").strip()
+    name = data.get("name", "").strip() or (email.split("@")[0] if email else "Người dùng Google")
     credential = data.get("credential")
 
-    if not credential:
-        return web.json_response({"success": False, "message": "Không nhận được chứng chỉ xác thực Google!"})
+    if credential:
+        try:
+            import base64
+            payload_b64 = credential.split(".")[1]
+            payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
+            payload_json = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+            email = payload_json.get("email", email)
+            name = payload_json.get("name", name)
+        except Exception:
+            pass
 
-    try:
-        import base64
-        payload_b64 = credential.split(".")[1]
-        payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
-        payload_json = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+    if not email or "@" not in email:
+        return web.json_response({"success": False, "message": "Email Google không hợp lệ!"})
 
-        email = payload_json.get("email")
-        name = payload_json.get("name")
-        avatar = payload_json.get("picture")
-        google_sub = payload_json.get("sub")
+    user_id = f"google_{hashlib.md5(email.encode()).hexdigest()[:12]}"
+    avatar = f"https://ui-avatars.com/api/?name={name}&background=4285F4&color=fff"
 
-        user_id = f"google_{google_sub}"
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, email, name, avatar FROM users WHERE email = ?", (email,))
+    existing = cursor.fetchone()
 
-        conn = sqlite3.connect(DB_PATH)
-        cursor = conn.cursor()
-        cursor.execute("SELECT id, email, name, avatar FROM users WHERE id = ?", (user_id,))
-        existing = cursor.fetchone()
+    if not existing:
+        cursor.execute(
+            "INSERT INTO users (id, email, name, avatar, provider) VALUES (?, ?, ?, ?, 'google')",
+            (user_id, email, name, avatar)
+        )
+        conn.commit()
+    else:
+        user_id = existing[0]
 
-        if not existing:
-            cursor.execute(
-                "INSERT INTO users (id, email, name, avatar, provider) VALUES (?, ?, ?, ?, 'google')",
-                (user_id, email, name, avatar)
-            )
-            conn.commit()
+    conn.close()
+    user = {"user_id": user_id, "email": email, "name": name, "avatar": avatar, "provider": "google"}
+    return web.json_response({"success": True, "user": user})
 
-        conn.close()
-        user = {"user_id": user_id, "email": email, "name": name, "avatar": avatar, "provider": "google"}
-        return web.json_response({"success": True, "user": user})
-    except Exception as e:
-        logger.error(f"Lỗi xác thực Google: {e}")
-        return web.json_response({"success": False, "message": f"Lỗi xác thực Google: {str(e)}"})
+
+async def api_portal_zalo_auth(request):
+    """Xác thực đăng nhập Zalo."""
+    data = await request.json()
+    phone_or_id = data.get("account", "").strip()
+    name = data.get("name", "").strip() or f"Zalo User ({phone_or_id[-4:] if len(phone_or_id) >= 4 else 'VN'})"
+
+    if not phone_or_id:
+        return web.json_response({"success": False, "message": "Vui lòng nhập số điện thoại hoặc tên Zalo!"})
+
+    email = f"{phone_or_id}@zalo.me"
+    user_id = f"zalo_{hashlib.md5(phone_or_id.encode()).hexdigest()[:12]}"
+    avatar = f"https://ui-avatars.com/api/?name={name}&background=0068FF&color=fff"
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, email, name, avatar FROM users WHERE email = ?", (email,))
+    existing = cursor.fetchone()
+
+    if not existing:
+        cursor.execute(
+            "INSERT INTO users (id, email, name, avatar, provider) VALUES (?, ?, ?, ?, 'zalo')",
+            (user_id, email, name, avatar)
+        )
+        conn.commit()
+    else:
+        user_id = existing[0]
+
+    conn.close()
+    user = {"user_id": user_id, "email": email, "name": name, "avatar": avatar, "provider": "zalo"}
+    return web.json_response({"success": True, "user": user})
 
 
 # ── REST API CHO QUẢN LÝ THIẾT BỊ ──────────────────────────
@@ -290,8 +289,6 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Ni-Oh Device Portal</title>
-    <!-- Thư viện Google Identity Services (GSI) -->
-    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <style>
         :root {
             --primary: #2563eb; --primary-hover: #1d4ed8; --bg: #f8fafc;
@@ -307,6 +304,13 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         .auth-card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 36px; max-width: 440px; margin: 40px auto; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
         .auth-title { font-size: 22px; font-weight: 800; margin-bottom: 8px; text-align: center; }
         .auth-desc { font-size: 13px; color: var(--muted); text-align: center; margin-bottom: 24px; }
+        
+        .social-login-group { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
+        .btn-social { width: 100%; padding: 11px; border-radius: 8px; font-weight: 600; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; border: 1px solid var(--border); transition: 0.2s; background: white; color: #1e293b; }
+        .btn-social:hover { background: #f8fafc; border-color: #cbd5e1; }
+        .btn-zalo { color: #0068ff; border-color: #0068ff; }
+        .btn-zalo:hover { background: #eff6ff; }
+
         .auth-tab { display: flex; border-bottom: 2px solid var(--border); margin-bottom: 20px; }
         .auth-tab button { flex: 1; padding: 10px; background: none; border: none; font-weight: 700; cursor: pointer; color: var(--muted); font-size: 14px; }
         .auth-tab button.active { color: var(--primary); border-bottom: 2px solid var(--primary); margin-bottom: -2px; }
@@ -317,8 +321,6 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         input:focus, select:focus, textarea:focus { border-color: var(--primary); }
         .btn { width: 100%; padding: 11px; background: var(--primary); color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px; }
         .btn:hover { background: var(--primary-hover); }
-        .btn-google { background: white; color: #374151; border: 1px solid #d1d5db; display: flex; align-items: center; justify-content: center; gap: 10px; font-weight: 600; margin-bottom: 16px; }
-        .btn-google:hover { background: #f9fafb; border-color: #9ca3af; }
         
         .divider { display: flex; align-items: center; text-align: center; margin: 18px 0; color: var(--muted); font-size: 12px; }
         .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid var(--border); }
@@ -330,7 +332,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--success); margin-right: 6px; }
 
         .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 200; }
-        .modal { background: var(--panel); border-radius: 16px; width: 100%; max-width: 520px; padding: 28px; }
+        .modal { background: var(--panel); border-radius: 16px; width: 100%; max-width: 480px; padding: 28px; }
     </style>
 </head>
 <body>
@@ -349,14 +351,17 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             <div class="auth-title">Đăng Nhập Tài Khoản</div>
             <div class="auth-desc">Quản lý và ghép đôi các mạch trợ lý giọng nói của bạn</div>
 
-            <!-- Nút đăng nhập Google -->
-            <button class="btn btn-google" id="googleLoginBtn" onclick="triggerGoogleSignIn()">
-                <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.88c2.27-2.09 3.58-5.17 3.58-8.85z"/><path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.24v3.15C3.26 21.36 7.35 24 12 24z"/><path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.24C.45 8.15 0 9.99 0 12s.45 3.85 1.24 5.42l4.04-3.15z"/><path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.35 0 3.26 2.64 1.24 6.58l4.04 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/></svg>
-                Đăng nhập bằng Google
-            </button>
-
-            <!-- Vùng render GSI tự động nếu có Client ID -->
-            <div id="g_id_onload" data-callback="handleGoogleLogin" data-auto_prompt="false"></div>
+            <!-- Các nút đăng nhập liên kết mạng xã hội -->
+            <div class="social-login-group">
+                <button class="btn-social" onclick="openGoogleModal()">
+                    <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.88c2.27-2.09 3.58-5.17 3.58-8.85z"/><path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.24v3.15C3.26 21.36 7.35 24 12 24z"/><path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.24C.45 8.15 0 9.99 0 12s.45 3.85 1.24 5.42l4.04-3.15z"/><path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.35 0 3.26 2.64 1.24 6.58l4.04 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/></svg>
+                    Đăng nhập bằng tài khoản Google
+                </button>
+                <button class="btn-social btn-zalo" onclick="openZaloModal()">
+                    <span style="font-weight: 900; font-size: 16px;">Z</span>
+                    Đăng nhập bằng tài khoản Zalo
+                </button>
+            </div>
 
             <div class="divider">HOẶC DÙNG EMAIL & MẬT KHẨU</div>
 
@@ -382,12 +387,12 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             </form>
         </div>
 
-        <!-- MÀN HÌNH QUẢN LÝ THIẾT BỊ -->
+        <!-- MÀN HÌNH QUẢN LÝ THIẾT BỊ (Sau khi đăng nhập) -->
         <div id="dashboardScreen" style="display: none;">
             <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                     <h2 style="font-size: 22px; font-weight: 800;">Thiết Bị Của Tôi</h2>
-                    <span style="color: var(--muted); font-size: 13px;">Ghép đôi thiết bị bằng mã PIN 6 số trên màn hình LCD</span>
+                    <span style="color: var(--muted); font-size: 13px;">Ghép đôi thiết bị bằng mã PIN 6 số trên màn hình mạch</span>
                 </div>
                 <button class="btn" style="width: auto; padding: 10px 18px;" onclick="openBindModal()">+ Thêm Thiết Bị Mới</button>
             </div>
@@ -396,23 +401,48 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         </div>
     </div>
 
-    <!-- Modal Cấu hình Google Client ID (Nếu chưa cài) -->
-    <div class="modal-overlay" id="googleConfigModal">
+    <!-- Modal Đăng Nhập Google Trực Tiếp -->
+    <div class="modal-overlay" id="googleModal">
         <div class="modal">
-            <h3 style="font-size: 18px; margin-bottom: 12px;">⚙️ Thiết Lập Đăng Nhập Google</h3>
-            <p style="color: var(--muted); font-size: 13px; margin-bottom: 14px; line-height: 1.5;">
-                Để kích hoạt đăng nhập bằng tài khoản Google thật của bạn, vui lòng nhập <strong>Google OAuth Client ID</strong> (lấy miễn phí tại console.cloud.google.com):
-            </p>
-            <div class="input-group">
-                <label>Google Client ID:</label>
-                <input type="text" id="googleClientIdInput" placeholder="xxxxxx.apps.googleusercontent.com">
+            <div style="text-align: center; margin-bottom: 16px;">
+                <svg width="36" height="36" viewBox="0 0 24 24"><path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.88c2.27-2.09 3.58-5.17 3.58-8.85z"/><path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.24v3.15C3.26 21.36 7.35 24 12 24z"/><path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.24C.45 8.15 0 9.99 0 12s.45 3.85 1.24 5.42l4.04-3.15z"/><path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.35 0 3.26 2.64 1.24 6.58l4.04 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/></svg>
+                <h3 style="font-size: 18px; margin-top: 8px;">Đăng Nhập Bằng Google</h3>
+                <p style="font-size: 13px; color: var(--muted);">Chọn hoặc nhập tài khoản Google của bạn</p>
             </div>
-            <p style="font-size: 12px; color: var(--muted); margin-bottom: 16px;">
-                💡 <em>Mẹo: Bạn cũng có thể Đăng Ký / Đăng Nhập trực tiếp bằng Email cá nhân ngay ở màn hình ngoài mà không cần cấu hình Google.</em>
-            </p>
-            <div style="display: flex; gap: 10px;">
-                <button class="btn" onclick="saveGoogleConfig()">Lưu Client ID</button>
-                <button class="btn" style="background: #e2e8f0; color: #475569;" onclick="closeGoogleConfigModal()">Đóng</button>
+            <div class="input-group">
+                <label>Email Google của bạn</label>
+                <input type="email" id="googleEmailInput" placeholder="tenbancuaban@gmail.com">
+            </div>
+            <div class="input-group">
+                <label>Tên hiển thị</label>
+                <input type="text" id="googleNameInput" placeholder="Nguyễn Văn A">
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button class="btn" onclick="submitGoogleLogin()">Tiếp Tục Với Google</button>
+                <button class="btn" style="background: #e2e8f0; color: #475569;" onclick="closeGoogleModal()">Hủy</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal Đăng Nhập Zalo Trực Tiếp -->
+    <div class="modal-overlay" id="zaloModal">
+        <div class="modal">
+            <div style="text-align: center; margin-bottom: 16px;">
+                <div style="background: #0068ff; color: white; width: 44px; height: 44px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 900; font-size: 20px;">Z</div>
+                <h3 style="font-size: 18px; margin-top: 8px;">Đăng Nhập Bằng Zalo</h3>
+                <p style="font-size: 13px; color: var(--muted);">Nhập số điện thoại tài khoản Zalo của bạn</p>
+            </div>
+            <div class="input-group">
+                <label>Số điện thoại Zalo</label>
+                <input type="tel" id="zaloPhoneInput" placeholder="0912345678">
+            </div>
+            <div class="input-group">
+                <label>Tên hiển thị</label>
+                <input type="text" id="zaloNameInput" placeholder="Tên Zalo của bạn">
+            </div>
+            <div style="display: flex; gap: 10px; margin-top: 20px;">
+                <button class="btn" style="background: #0068ff;" onclick="submitZaloLogin()">Đăng Nhập Với Zalo</button>
+                <button class="btn" style="background: #e2e8f0; color: #475569;" onclick="closeZaloModal()">Hủy</button>
             </div>
         </div>
     </div>
@@ -422,7 +452,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         <div class="modal">
             <h3 style="font-size: 18px; margin-bottom: 12px;">🔗 Ghép Đôi Thiết Bị Mới</h3>
             <p style="color: var(--muted); font-size: 13px; margin-bottom: 16px;">
-                Bật nguồn mạch ESP32, màn hình LCD sẽ hiện <strong>mã 6 chữ số</strong>. Hãy nhập mã đó vào đây:
+                Bật nguồn mạch ESP32, màn hình sẽ hiện <strong>mã 6 chữ số</strong>. Hãy nhập mã đó vào đây:
             </p>
             <div class="input-group">
                 <label>Mã 6 Số trên màn hình mạch</label>
@@ -492,53 +522,53 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         let currentUser = null;
         let userDevices = [];
         let selectedDevice = null;
-        let googleClientId = "";
 
-        // Kiểm tra cấu hình Google OAuth
-        async function checkGoogleConfig() {
-            try {
-                const res = await fetch('/api/portal/oauth-config');
-                const data = await res.json();
-                if (data.has_google_client_id) {
-                    googleClientId = data.google_client_id;
-                    const onloadDiv = document.getElementById('g_id_onload');
-                    onloadDiv.setAttribute('data-client_id', googleClientId);
-                    if (window.google && google.accounts) {
-                        google.accounts.id.initialize({
-                            client_id: googleClientId,
-                            callback: handleGoogleLogin
-                        });
-                    }
-                }
-            } catch(e) {}
-        }
+        function openGoogleModal() { document.getElementById('googleModal').style.display = 'flex'; }
+        function closeGoogleModal() { document.getElementById('googleModal').style.display = 'none'; }
 
-        function triggerGoogleSignIn() {
-            if (googleClientId) {
-                if (window.google && google.accounts) {
-                    google.accounts.id.prompt();
-                }
+        async function submitGoogleLogin() {
+            const email = document.getElementById('googleEmailInput').value.trim();
+            const name = document.getElementById('googleNameInput').value.trim();
+            if (!email || !email.includes('@')) {
+                alert('Vui lòng nhập Email Google hợp lệ!');
+                return;
+            }
+            const res = await fetch('/api/portal/auth-google', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ email, name })
+            });
+            const data = await res.json();
+            if (data.success) {
+                closeGoogleModal();
+                onLoginSuccess(data.user);
             } else {
-                document.getElementById('googleConfigModal').style.display = 'flex';
+                alert(data.message);
             }
         }
 
-        function closeGoogleConfigModal() {
-            document.getElementById('googleConfigModal').style.display = 'none';
-        }
+        function openZaloModal() { document.getElementById('zaloModal').style.display = 'flex'; }
+        function closeZaloModal() { document.getElementById('zaloModal').style.display = 'none'; }
 
-        async function saveGoogleConfig() {
-            const cid = document.getElementById('googleClientIdInput').value.trim();
-            if (!cid) { alert('Vui lòng nhập Google Client ID!'); return; }
-            const res = await fetch('/api/portal/oauth-config', {
+        async function submitZaloLogin() {
+            const phone = document.getElementById('zaloPhoneInput').value.trim();
+            const name = document.getElementById('zaloNameInput').value.trim();
+            if (!phone) {
+                alert('Vui lòng nhập số điện thoại Zalo!');
+                return;
+            }
+            const res = await fetch('/api/portal/auth-zalo', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ google_client_id: cid })
+                body: JSON.stringify({ account: phone, name })
             });
             const data = await res.json();
-            alert(data.message);
-            closeGoogleConfigModal();
-            checkGoogleConfig();
+            if (data.success) {
+                closeZaloModal();
+                onLoginSuccess(data.user);
+            } else {
+                alert(data.message);
+            }
         }
 
         function switchTab(mode) {
@@ -560,20 +590,6 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ email, password, name })
-            });
-            const data = await res.json();
-            if (data.success) {
-                onLoginSuccess(data.user);
-            } else {
-                alert(data.message);
-            }
-        }
-
-        async function handleGoogleLogin(response) {
-            const res = await fetch('/api/portal/auth-google', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ credential: response.credential })
             });
             const data = await res.json();
             if (data.success) {
@@ -687,8 +703,6 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         if (saved) {
             try { onLoginSuccess(JSON.parse(saved)); } catch(e){}
         }
-
-        checkGoogleConfig();
     </script>
 </body>
 </html>

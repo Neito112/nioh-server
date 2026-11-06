@@ -7,10 +7,15 @@ Ni-Oh Server Gateway & Portal Application
    - Cung cấp cổng WSS và OTA cho ESP32
 
 2. WEB PORTAL = QUẢN LÝ THIẾT BỊ:
-   - Đăng nhập tài khoản Google thật hoặc Đăng ký / Đăng nhập tài khoản cá nhân lưu trữ SQLite
+   - Đăng nhập tài khoản Google / Zalo / Email cá nhân lưu trữ SQLite
    - Ghép đôi thiết bị bằng MÃ 6 CHỮ SỐ trên màn hình ESP32
    - Chọn Model AI phù hợp cho từng con bot (DeepSeek V3, Gemini Flash 2.0 Free, GPT-4o Mini...)
    - Cài đặt API Key cá nhân, giọng đọc tiếng Việt, câu lệnh Prompt nhân cách
+
+3. WEBSOCKET VOICE ENGINE:
+   - Nhận kết nối trực tiếp từ ESP32 tại /xiaozhi/v1/
+   - Bắt tay Hello Handshake chuẩn Xiaozhi
+   - Xử lý câu thoại, gọi LLM, trả về kết quả
 """
 
 import os
@@ -45,15 +50,15 @@ from server.gateway_app import (
 )
 from server.web_portal import (
     HTML_XIAOZHI_PORTAL,
-    api_portal_get_oauth_config,
-    api_portal_save_oauth_config,
     api_portal_google_auth,
+    api_portal_zalo_auth,
     api_portal_login,
     api_portal_register,
     api_portal_get_devices,
     api_portal_bind_device,
     api_portal_update_device
 )
+from server.voice_engine import handle_xiaozhi_websocket
 
 logger = logging.getLogger("nioh.main_app")
 
@@ -106,17 +111,17 @@ def create_application(port: int = 8001):
 
     # ── 2. WEB PORTAL QUẢN LÝ THIẾT BỊ ──────────────────────
     app.router.add_get("/portal", lambda req: web.Response(text=HTML_XIAOZHI_PORTAL, content_type="text/html"))
-    app.router.add_get("/api/portal/oauth-config", api_portal_get_oauth_config)
-    app.router.add_post("/api/portal/oauth-config", api_portal_save_oauth_config)
     app.router.add_post("/api/portal/auth-google", api_portal_google_auth)
+    app.router.add_post("/api/portal/auth-zalo", api_portal_zalo_auth)
     app.router.add_post("/api/portal/login", api_portal_login)
     app.router.add_post("/api/portal/register", api_portal_register)
     app.router.add_get("/api/portal/devices", api_portal_get_devices)
     app.router.add_post("/api/portal/bind", api_portal_bind_device)
     app.router.add_post("/api/portal/update-device", api_portal_update_device)
 
-    # ── 3. CỔNG OTA CHO ESP32 QUA CLOUDFLARE ─────────────────
+    # ── 3. CỔNG OTA & WEBSOCKET VOICE CHO ESP32 ───────────────
     app.router.add_get("/xiaozhi/ota/", handle_ota_request)
+    app.router.add_get("/xiaozhi/v1/", handle_xiaozhi_websocket)
 
     return app
 
