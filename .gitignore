@@ -1,0 +1,9 @@
+.env
+*.pyc
+__pycache__/
+.venv/
+.cloudflared/*.json
+xiaozhi-server/
+_upstream/
+*.log
+data/
