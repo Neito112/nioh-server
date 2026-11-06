@@ -1,9 +1,9 @@
 # Ni-Oh Server & Device Portal
 
-> **Hệ thống Cổng Server AI phân tán & Web Quản lý thiết bị tương thích Xiaozhi ESP32.**  
+> **Hệ thống Cổng Server AI phân tán & Web Quản lý thiết bị.**  
 > Chuẩn hóa theo mô hình 2 tầng độc lập:
 > 1. **Desktop App = CỔNG SERVER:** Đăng nhập liên kết Cloudflare để kích hoạt cổng và **XUẤT RA LINK WEB**.
-> 2. **Web Portal = QUẢN LÝ THIẾT BỊ (Y hệt xiaozhi.me):** Đăng nhập tài khoản cá nhân qua **Google / Zalo**, ghép đôi bằng **mã 6 chữ số**, chọn Model AI phù hợp cho từng con bot.
+> 2. **Web Portal = QUẢN LÝ THIẾT BỊ:** Đăng nhập tài khoản cá nhân qua **Google / Email cá nhân**, ghép đôi bằng **mã 6 chữ số**, chọn Model AI phù hợp cho từng con bot.
 
 ---
 
@@ -22,9 +22,9 @@
                             │
                             ▼
 ┌────────────────────────────────────────────────────────┐
-│       2. TRANG WEB QUẢN LÝ THIẾT BỊ (Y HỆT XIAOZHI.ME) │
+│             2. TRANG WEB QUẢN LÝ THIẾT BỊ              │
 │  - Người dùng: Bất kỳ ai sở hữu con bot ESP32          │
-│  - Đăng nhập: Tài khoản cá nhân qua GOOGLE hoặc ZALO   │
+│  - Đăng nhập: Tài khoản GOOGLE hoặc EMAIL CÁ NHÂN      │
 │  - Chức năng:                                          │
 │    + Ghép đôi mạch bằng MÃ 6 CHỮ SỐ trên màn hình      │
 │    + Chọn Model AI (Menu chọn các model phù hợp)       │

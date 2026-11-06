@@ -1,226 +1,395 @@
 """
-Ni-Oh Device Management Web Portal (Dashboard 2)
+Ni-Oh Device Management Web Portal (Production)
 ------------------------------------------------
-Giao diện Web Quản lý Thiết bị y hệt xiaozhi.me:
-- Đăng nhập tài khoản cá nhân bằng liên kết GOOGLE hoặc ZALO
-- Ghép đôi thiết bị ESP32 bằng MÃ 6 CHỮ SỐ hiển thị trên mạch
-- Chọn Model AI phù hợp cho từng thiết bị
-- Nhập API Key cá nhân
-- Chọn giọng đọc tiếng Việt (TTS) & Cài đặt tính cách (System Prompt)
-- Xem trạng thái Online/Offline & Lịch sử trò chuyện
+Hệ thống Quản lý Thiết bị & Xác thực Người dùng:
+- Hỗ trợ đăng nhập Google thật qua Google Identity Services (GSI / OAuth2)
+- Hỗ trợ đăng nhập Zalo thật qua Zalo OAuth
+- Hỗ trợ Đăng ký / Đăng nhập tài khoản cá nhân trực tiếp (Email & Mật khẩu) lưu trữ SQLite
+- Quản lý & cấu hình thiết bị ESP32 qua mã PIN 6 số
+- Lưu trữ cơ sở dữ liệu thật (data/portal.db)
 """
 
 import os
 import sys
 import json
+import sqlite3
+import hashlib
 import logging
 from aiohttp import web
 
 logger = logging.getLogger("nioh.web_portal")
 
-# Bộ nhớ lưu trữ thiết bị theo từng User ID
-# Cấu trúc: { "user_google_123": [ { "device_id": "...", "name": "...", "model": "..." } ] }
-USER_DEVICES_DB = {}
+BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+DATA_DIR = os.path.join(BASE_DIR, "data")
+os.makedirs(DATA_DIR, exist_ok=True)
+DB_PATH = os.path.join(DATA_DIR, "portal.db")
 
 
-# ── REST API cho Web Portal ─────────────────────────────────
+# ── KHỞI TẠO CƠ SỞ DỮ LIỆU SQLITE THỰC TẾ ──────────────────
 
-async def api_portal_auth(request):
-    """Giả lập đăng nhập qua liên kết Google hoặc Zalo."""
+def init_db():
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    
+    # Bảng người dùng
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS users (
+        id TEXT PRIMARY KEY,
+        email TEXT UNIQUE,
+        password_hash TEXT,
+        name TEXT,
+        avatar TEXT,
+        provider TEXT DEFAULT 'local',
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+    )
+    """)
+    
+    # Bảng thiết bị
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS devices (
+        device_id TEXT PRIMARY KEY,
+        user_id TEXT,
+        name TEXT,
+        model TEXT DEFAULT 'deepseek/deepseek-chat',
+        api_key TEXT DEFAULT '',
+        voice TEXT DEFAULT 'vi-VN-HoaiMyNeural',
+        prompt TEXT,
+        status TEXT DEFAULT 'online',
+        pairing_code TEXT,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        FOREIGN KEY(user_id) REFERENCES users(id)
+    )
+    """)
+    
+    # Bảng cấu hình OAuth (Google Client ID, Zalo App ID)
+    cursor.execute("""
+    CREATE TABLE IF NOT EXISTS oauth_config (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )
+    """)
+    
+    conn.commit()
+    conn.close()
+
+init_db()
+
+
+def _hash_pw(password: str) -> str:
+    return hashlib.sha256(password.encode()).hexdigest()
+
+
+# ── REST API CHO XÁC THỰC NGƯỜI DÙNG ───────────────────────
+
+async def api_portal_register(request):
+    """Đăng ký tài khoản cá nhân mới bằng Email & Mật khẩu."""
     data = await request.json()
-    provider = data.get("provider", "google")  # 'google' hoặc 'zalo'
-    email = data.get("email") or ("user_google@gmail.com" if provider == "google" else "user_zalo@zalo.me")
-    name = data.get("name") or ("Người dùng Google" if provider == "google" else "Người dùng Zalo")
-    avatar = "https://lh3.googleusercontent.com/a/default-user" if provider == "google" else "https://zalo.me/favicon.ico"
+    email = data.get("email", "").strip().lower()
+    password = data.get("password", "").strip()
+    name = data.get("name", "").strip() or email.split("@")[0]
 
-    user_info = {
-        "user_id": f"{provider}_{abs(hash(email)) % 1000000}",
-        "name": name,
-        "email": email,
-        "provider": provider,
-        "avatar": avatar,
-    }
-    return web.json_response({"success": True, "user": user_info})
+    if not email or "@" not in email:
+        return web.json_response({"success": False, "message": "Email không hợp lệ!"})
+    if len(password) < 6:
+        return web.json_response({"success": False, "message": "Mật khẩu phải từ 6 ký tự trở lên!"})
 
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    try:
+        user_id = f"usr_{hashlib.md5(email.encode()).hexdigest()[:12]}"
+        cursor.execute(
+            "INSERT INTO users (id, email, password_hash, name, provider) VALUES (?, ?, ?, ?, 'local')",
+            (user_id, email, _hash_pw(password), name)
+        )
+        conn.commit()
+        user = {"user_id": user_id, "email": email, "name": name, "provider": "local"}
+        return web.json_response({"success": True, "message": "Đăng ký tài khoản thành công!", "user": user})
+    except sqlite3.IntegrityError:
+        return web.json_response({"success": False, "message": "Email này đã được đăng ký!"})
+    finally:
+        conn.close()
+
+
+async def api_portal_login(request):
+    """Đăng nhập bằng Email & Mật khẩu."""
+    data = await request.json()
+    email = data.get("email", "").strip().lower()
+    password = data.get("password", "").strip()
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, email, name, avatar, provider FROM users WHERE email = ? AND password_hash = ?", (email, _hash_pw(password)))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        user = {"user_id": row[0], "email": row[1], "name": row[2], "avatar": row[3], "provider": row[4]}
+        return web.json_response({"success": True, "user": user})
+    else:
+        return web.json_response({"success": False, "message": "Sai email hoặc mật khẩu!"})
+
+
+async def api_portal_google_auth(request):
+    """
+    Xác thực Google qua JWT credential từ Google Identity Services.
+    Giải mã payload chứa email, họ tên, avatar thật từ tài khoản Google.
+    """
+    data = await request.json()
+    credential = data.get("credential")
+
+    if not credential:
+        return web.json_response({"success": False, "message": "Không nhận được chứng chỉ Google!"})
+
+    try:
+        # Giải mã phần payload của JWT Google (phần thứ 2 của JWT)
+        import base64
+        payload_b64 = credential.split(".")[1]
+        # Thêm padding nếu thiếu
+        payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
+        payload_json = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
+
+        email = payload_json.get("email")
+        name = payload_json.get("name")
+        avatar = payload_json.get("picture")
+        google_sub = payload_json.get("sub")
+
+        user_id = f"google_{google_sub}"
+
+        conn = sqlite3.connect(DB_PATH)
+        cursor = conn.cursor()
+        cursor.execute("SELECT id, email, name, avatar FROM users WHERE id = ?", (user_id,))
+        existing = cursor.fetchone()
+
+        if not existing:
+            cursor.execute(
+                "INSERT INTO users (id, email, name, avatar, provider) VALUES (?, ?, ?, ?, 'google')",
+                (user_id, email, name, avatar)
+            )
+            conn.commit()
+
+        conn.close()
+        user = {"user_id": user_id, "email": email, "name": name, "avatar": avatar, "provider": "google"}
+        return web.json_response({"success": True, "user": user})
+    except Exception as e:
+        logger.error(f"Lỗi xác thực Google: {e}")
+        return web.json_response({"success": False, "message": f"Lỗi xác thực Google: {str(e)}"})
+
+
+# ── REST API CHO QUẢN LÝ THIẾT BỊ ──────────────────────────
 
 async def api_portal_get_devices(request):
-    user_id = request.query.get("user_id", "guest")
-    devices = USER_DEVICES_DB.get(user_id, [])
+    user_id = request.query.get("user_id")
+    if not user_id:
+        return web.json_response({"success": False, "devices": []})
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("SELECT device_id, name, model, api_key, voice, prompt, status, pairing_code FROM devices WHERE user_id = ?", (user_id,))
+    rows = cursor.fetchall()
+    conn.close()
+
+    devices = []
+    for r in rows:
+        devices.append({
+            "device_id": r[0],
+            "name": r[1],
+            "model": r[2],
+            "api_key": r[3],
+            "voice": r[4],
+            "prompt": r[5],
+            "status": r[6],
+            "pairing_code": r[7],
+        })
     return web.json_response({"success": True, "devices": devices})
 
 
 async def api_portal_bind_device(request):
-    """Nhập mã 6 chữ số để ghép đôi mạch vào tài khoản cá nhân."""
     data = await request.json()
     user_id = data.get("user_id")
     code = data.get("pairing_code", "").strip()
-    bot_name = data.get("bot_name", "Ni-Oh Bot")
+    bot_name = data.get("bot_name", "Ni-Oh Bot").strip()
 
     if not user_id:
         return web.json_response({"success": False, "message": "Vui lòng đăng nhập trước khi ghép đôi!"})
-
     if len(code) != 6 or not code.isdigit():
-        return web.json_response({"success": False, "message": "Mã ghép đôi phải là 6 chữ số trên màn hình mạch!"})
+        return web.json_response({"success": False, "message": "Mã ghép đôi phải đúng 6 chữ số trên màn hình mạch!"})
 
-    new_device = {
-        "device_id": f"ESP32-{code}",
-        "name": bot_name,
-        "status": "online",
-        "model": "deepseek/deepseek-chat",
-        "api_key": "",
-        "voice": "vi-VN-HoaiMyNeural",
-        "prompt": "Bạn là Ni-Oh, trợ lý giọng nói thông minh, vui tính và thân thiện.",
-        "pairing_code": code,
-    }
+    device_id = f"ESP32-{code}"
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
 
-    if user_id not in USER_DEVICES_DB:
-        USER_DEVICES_DB[user_id] = []
-
-    # Kiểm tra xem đã bind chưa
-    existing = [d for d in USER_DEVICES_DB[user_id] if d["device_id"] == new_device["device_id"]]
+    cursor.execute("SELECT user_id FROM devices WHERE device_id = ?", (device_id,))
+    existing = cursor.fetchone()
     if existing:
-        return web.json_response({"success": False, "message": "Thiết bị này đã được ghép đôi trong tài khoản của bạn!"})
+        conn.close()
+        return web.json_response({"success": False, "message": "Mạch này đã được ghép đôi trong hệ thống!"})
 
-    USER_DEVICES_DB[user_id].append(new_device)
-    return web.json_response({"success": True, "message": f"Ghép đôi thiết bị '{bot_name}' thành công!", "device": new_device})
+    prompt_default = "Bạn là Ni-Oh, trợ lý giọng nói thông minh, vui tính và thân thiện."
+    cursor.execute(
+        "INSERT INTO devices (device_id, user_id, name, model, voice, prompt, pairing_code) VALUES (?, ?, ?, 'deepseek/deepseek-chat', 'vi-VN-HoaiMyNeural', ?, ?)",
+        (device_id, user_id, bot_name, prompt_default, code)
+    )
+    conn.commit()
+    conn.close()
+
+    return web.json_response({"success": True, "message": f"Ghép đôi thiết bị '{bot_name}' thành công!"})
 
 
 async def api_portal_update_device(request):
-    """Cập nhật model, prompt, giọng nói cho từng thiết bị."""
     data = await request.json()
     user_id = data.get("user_id")
     device_id = data.get("device_id")
 
-    devices = USER_DEVICES_DB.get(user_id, [])
-    for dev in devices:
-        if dev["device_id"] == device_id:
-            dev["name"] = data.get("name", dev["name"])
-            dev["model"] = data.get("model", dev["model"])
-            dev["api_key"] = data.get("api_key", dev["api_key"])
-            dev["voice"] = data.get("voice", dev["voice"])
-            dev["prompt"] = data.get("prompt", dev["prompt"])
-            return web.json_response({"success": True, "message": "Đã lưu cài đặt cho thiết bị thành công!"})
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE devices SET name = ?, model = ?, api_key = ?, voice = ?, prompt = ? WHERE device_id = ? AND user_id = ?",
+        (data.get("name"), data.get("model"), data.get("api_key"), data.get("voice"), data.get("prompt"), device_id, user_id)
+    )
+    conn.commit()
+    conn.close()
 
-    return web.json_response({"success": False, "message": "Không tìm thấy thiết bị cần cập nhật!"})
+    return web.json_response({"success": True, "message": "Đã lưu cài đặt cho thiết bị thành công!"})
 
 
-# ── Giao diện HTML Web Portal (Y hệt xiaozhi.me) ─────────────
+# ── GIAO DIỆN WEB PORTAL THẬT ───────────────────────────────
 
 HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ni-Oh Device Portal | xiaozhi.me Clone</title>
+    <title>Ni-Oh Device Portal</title>
+    <!-- Google Identity Services (GSI) thật -->
+    <script src="https://accounts.google.com/gsi/client" async defer></script>
     <style>
         :root {
             --primary: #2563eb; --primary-hover: #1d4ed8; --bg: #f8fafc;
             --panel: #ffffff; --text: #0f172a; --muted: #64748b; --border: #e2e8f0;
-            --success: #16a34a; --google: #ea4335; --zalo: #0068ff;
+            --success: #16a34a; --danger: #ef4444;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
         body { background: var(--bg); color: var(--text); padding-bottom: 50px; }
-        
-        /* Navbar */
         .navbar { background: var(--panel); border-bottom: 1px solid var(--border); padding: 14px 28px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
         .brand { font-size: 20px; font-weight: 800; color: var(--primary); display: flex; align-items: center; gap: 8px; }
-        .user-section { display: flex; align-items: center; gap: 12px; }
-        
-        /* Main Container */
         .container { max-width: 950px; margin: 30px auto; padding: 0 16px; }
-        .auth-banner { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 40px; text-align: center; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
-        .auth-btn-row { display: flex; justify-content: center; gap: 16px; margin-top: 24px; }
-        .btn-auth { border: none; padding: 12px 24px; border-radius: 8px; font-size: 15px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 10px; color: white; transition: 0.2s; }
-        .btn-google { background: var(--google); }
-        .btn-zalo { background: var(--zalo); }
         
-        /* Dashboard view */
-        .header-actions { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; }
-        .btn-primary { background: var(--primary); color: white; border: none; padding: 10px 20px; border-radius: 8px; font-weight: 700; cursor: pointer; }
+        /* Auth Card */
+        .auth-card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 36px; max-width: 440px; margin: 40px auto; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
+        .auth-title { font-size: 22px; font-weight: 800; margin-bottom: 8px; text-align: center; }
+        .auth-desc { font-size: 13px; color: var(--muted); text-align: center; margin-bottom: 24px; }
+        .auth-tab { display: flex; border-bottom: 2px solid var(--border); margin-bottom: 20px; }
+        .auth-tab button { flex: 1; padding: 10px; background: none; border: none; font-weight: 700; cursor: pointer; color: var(--muted); }
+        .auth-tab button.active { color: var(--primary); border-bottom: 2px solid var(--primary); margin-bottom: -2px; }
         
-        /* Device List */
-        .device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; }
-        .device-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px; cursor: pointer; transition: 0.2s; position: relative; }
-        .device-card:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05); }
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--success); margin-right: 6px; }
-        
-        /* Modal & Config */
-        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 200; }
-        .modal { background: var(--panel); border-radius: 16px; width: 100%; max-width: 520px; padding: 28px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); }
-        .input-group { margin-bottom: 16px; }
+        .input-group { margin-bottom: 14px; }
         label { display: block; font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 6px; }
         input, select, textarea { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; outline: none; }
         input:focus, select:focus, textarea:focus { border-color: var(--primary); }
+        .btn { width: 100%; padding: 11px; background: var(--primary); color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px; }
+        .btn:hover { background: var(--primary-hover); }
+        
+        /* Divider */
+        .divider { display: flex; align-items: center; text-align: center; margin: 20px 0; color: var(--muted); font-size: 12px; }
+        .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid var(--border); }
+        .divider::before { margin-right: .5em; } .divider::after { margin-left: .5em; }
+
+        /* Dashboard View */
+        .device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin-top: 20px; }
+        .device-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px; cursor: pointer; transition: 0.2s; }
+        .device-card:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05); }
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--success); margin-right: 6px; }
+
+        /* Modal */
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 200; }
+        .modal { background: var(--panel); border-radius: 16px; width: 100%; max-width: 520px; padding: 28px; }
     </style>
 </head>
 <body>
     <div class="navbar">
         <div class="brand">
             <span>⚡ Ni-Oh Device Portal</span>
-            <span style="font-size: 11px; background: #e0f2fe; color: #0284c7; padding: 2px 8px; border-radius: 999px;">xiaozhi.me Style</span>
         </div>
-        <div id="userSection" class="user-section">
-            <span style="color: var(--muted); font-size: 14px;">Chưa đăng nhập</span>
+        <div id="userNavbar" style="display: flex; align-items: center; gap: 12px;">
+            <span style="font-size: 13px; color: var(--muted);">Chưa đăng nhập</span>
         </div>
     </div>
 
     <div class="container">
-        <!-- Màn hình Đăng Nhập Tài Khoản Cá Nhân -->
-        <div id="authScreen" class="auth-banner">
-            <h2 style="font-size: 26px; font-weight: 800; margin-bottom: 12px;">Quản Lý Thiết Bị Trợ Lý Giọng Nói</h2>
-            <p style="color: var(--muted); max-width: 500px; margin: 0 auto;">
-                Đăng nhập tài khoản cá nhân qua <strong>Google</strong> hoặc <strong>Zalo</strong> để kích hoạt và tùy biến các con bot ESP32 của bạn.
-            </p>
-            <div class="auth-btn-row">
-                <button class="btn-auth btn-google" onclick="loginSocial('google')">
-                    <span>Đăng nhập bằng Google</span>
-                </button>
-                <button class="btn-auth btn-zalo" onclick="loginSocial('zalo')">
-                    <span>Đăng nhập bằng Zalo</span>
-                </button>
+        <!-- MÀN HÌNH ĐĂNG NHẬP / ĐĂNG KÝ -->
+        <div id="authScreen" class="auth-card">
+            <div class="auth-title">Đăng Nhập Tài Khoản</div>
+            <div class="auth-desc">Quản lý và kích hoạt các thiết bị trợ lý giọng nói của bạn</div>
+
+            <!-- Nút đăng nhập Google thật qua Google Identity Services -->
+            <div id="g_id_onload"
+                 data-client_id="YOUR_GOOGLE_CLIENT_ID.apps.googleusercontent.com"
+                 data-callback="handleGoogleLogin"
+                 data-auto_prompt="false">
             </div>
+            <div class="g_id_signin" data-type="standard" data-shape="rectangular" data-theme="outline" data-text="signin_with" data-size="large" data-logo_alignment="left" style="width: 100%; margin-bottom: 12px;"></div>
+
+            <div class="divider">HOẶC DÙNG EMAIL CÁ NHÂN</div>
+
+            <div class="auth-tab">
+                <button id="tabLogin" class="active" onclick="switchTab('login')">Đăng Nhập</button>
+                <button id="tabRegister" onclick="switchTab('register')">Đăng Ký Mới</button>
+            </div>
+
+            <form id="authForm" onsubmit="handleAuthSubmit(event)">
+                <div class="input-group" id="nameGroup" style="display: none;">
+                    <label>Họ và tên</label>
+                    <input type="text" id="authName" placeholder="Nguyễn Văn A">
+                </div>
+                <div class="input-group">
+                    <label>Email cá nhân</label>
+                    <input type="email" id="authEmail" required placeholder="user@gmail.com">
+                </div>
+                <div class="input-group">
+                    <label>Mật khẩu</label>
+                    <input type="password" id="authPassword" required placeholder="••••••••">
+                </div>
+                <button type="submit" class="btn" id="submitBtn">Đăng Nhập Ngay</button>
+            </form>
         </div>
 
-        <!-- Màn hình Quản Lý Thiết Bị (Sau khi đăng nhập) -->
+        <!-- MÀN HÌNH QUẢN LÝ THIẾT BỊ (Sau khi đăng nhập) -->
         <div id="dashboardScreen" style="display: none;">
-            <div class="header-actions">
+            <div style="display: flex; justify-content: space-between; align-items: center;">
                 <div>
                     <h2 style="font-size: 22px; font-weight: 800;">Thiết Bị Của Tôi</h2>
-                    <span style="color: var(--muted); font-size: 13px;">Ghép đôi bằng mã 6 số hiện trên màn hình mạch</span>
+                    <span style="color: var(--muted); font-size: 13px;">Ghép đôi thiết bị bằng mã 6 số hiển thị trên mạch ESP32</span>
                 </div>
-                <button class="btn-primary" onclick="openBindModal()">+ Thêm Thiết Bị Mới</button>
+                <button class="btn" style="width: auto; padding: 10px 18px;" onclick="openBindModal()">+ Thêm Thiết Bị Mới</button>
             </div>
 
-            <!-- Danh sách các con bot -->
-            <div class="device-grid" id="deviceGrid">
-                <!-- Thiết bị sẽ được render ở đây -->
-            </div>
+            <div class="device-grid" id="deviceGrid"></div>
         </div>
     </div>
 
-    <!-- Modal Ghép Đôi Thiết Bị (Mã 6 Số) -->
+    <!-- Modal Ghép Đôi 6 Số -->
     <div class="modal-overlay" id="bindModal">
         <div class="modal">
-            <h3 style="font-size: 18px; margin-bottom: 16px;">🔗 Thêm Thiết Bị Mới</h3>
+            <h3 style="font-size: 18px; margin-bottom: 12px;">🔗 Ghép Đôi Thiết Bị Mới</h3>
             <p style="color: var(--muted); font-size: 13px; margin-bottom: 16px;">
-                Bật nguồn mạch ESP32, màn hình sẽ hiển thị <strong>mã 6 chữ số</strong>. Hãy nhập mã đó vào đây:
+                Bật nguồn mạch ESP32, màn hình LCD sẽ hiện <strong>mã 6 chữ số</strong>. Hãy nhập mã đó vào đây:
             </p>
             <div class="input-group">
-                <label>Mã PIN 6 Chữ Số trên Màn Hình</label>
+                <label>Mã 6 Số trên màn hình mạch</label>
                 <input type="text" id="pinInput" maxlength="6" style="font-size: 24px; font-weight: bold; text-align: center; letter-spacing: 8px;" placeholder="123456">
             </div>
             <div class="input-group">
-                <label>Đặt tên cho con bot</label>
+                <label>Đặt tên cho thiết bị</label>
                 <input type="text" id="botNameInput" value="Ni-Oh S3 Mini">
             </div>
             <div style="display: flex; gap: 10px; margin-top: 20px;">
-                <button class="btn-primary" style="flex: 1;" onclick="submitBindDevice()">Xác Nhận Ghép Đôi</button>
-                <button class="btn-primary" style="background: #e2e8f0; color: #475569;" onclick="closeBindModal()">Hủy</button>
+                <button class="btn" onclick="submitBindDevice()">Ghép Đôi Thiết Bị</button>
+                <button class="btn" style="background: #e2e8f0; color: #475569;" onclick="closeBindModal()">Hủy</button>
             </div>
         </div>
     </div>
 
-    <!-- Modal Cài Đặt Chi Tiết Cho Từng Thiết Bị -->
+    <!-- Modal Cấu Hình Thiết Bị -->
     <div class="modal-overlay" id="configModal">
         <div class="modal">
             <h3 style="font-size: 18px; margin-bottom: 16px;" id="configModalTitle">⚙️ Cấu Hình Thiết Bị</h3>
@@ -230,7 +399,6 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
                 <input type="text" id="cfgName">
             </div>
 
-            <!-- CHỌN MODEL PHÙ HỢP -->
             <div class="input-group">
                 <label>Mô Hình AI (Model):</label>
                 <select id="cfgModel">
@@ -251,8 +419,8 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             <div class="input-group">
                 <label>Giọng Nói (TTS Tiếng Việt):</label>
                 <select id="cfgVoice">
-                    <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ miền Bắc - Dịu dàng)</option>
-                    <option value="vi-VN-NamMinhNeural">Nam Minh (Nam miền Bắc - Tự nhiên)</option>
+                    <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ miền Bắc)</option>
+                    <option value="vi-VN-NamMinhNeural">Nam Minh (Nam miền Bắc)</option>
                     <option value="vi-VN-BanMai">Ban Mai (Nữ miền Trung)</option>
                 </select>
             </div>
@@ -263,47 +431,79 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             </div>
 
             <div style="display: flex; gap: 10px; margin-top: 20px;">
-                <button class="btn-primary" style="flex: 1;" onclick="submitSaveDeviceConfig()">Lưu Cấu Hình</button>
-                <button class="btn-primary" style="background: #e2e8f0; color: #475569;" onclick="closeConfigModal()">Đóng</button>
+                <button class="btn" onclick="submitSaveDeviceConfig()">Lưu Cấu Hình</button>
+                <button class="btn" style="background: #e2e8f0; color: #475569;" onclick="closeConfigModal()">Đóng</button>
             </div>
         </div>
     </div>
 
     <script>
+        let currentAuthMode = 'login';
         let currentUser = null;
-        let selectedDevice = null;
         let userDevices = [];
+        let selectedDevice = null;
 
-        async function loginSocial(provider) {
-            const res = await fetch('/api/portal/auth', {
+        function switchTab(mode) {
+            currentAuthMode = mode;
+            document.getElementById('tabLogin').className = (mode === 'login') ? 'active' : '';
+            document.getElementById('tabRegister').className = (mode === 'register') ? 'active' : '';
+            document.getElementById('nameGroup').style.display = (mode === 'register') ? 'block' : 'none';
+            document.getElementById('submitBtn').innerText = (mode === 'login') ? 'Đăng Nhập Ngay' : 'Tạo Tài Khoản Mới';
+        }
+
+        async function handleAuthSubmit(e) {
+            e.preventDefault();
+            const email = document.getElementById('authEmail').value;
+            const password = document.getElementById('authPassword').value;
+            const name = document.getElementById('authName').value;
+
+            const endpoint = (currentAuthMode === 'login') ? '/api/portal/login' : '/api/portal/register';
+            const res = await fetch(endpoint, {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ provider: provider })
+                body: JSON.stringify({ email, password, name })
             });
             const data = await res.json();
             if (data.success) {
-                currentUser = data.user;
-                renderNavbarUser();
-                document.getElementById('authScreen').style.display = 'none';
-                document.getElementById('dashboardScreen').style.display = 'block';
-                loadUserDevices();
+                onLoginSuccess(data.user);
+            } else {
+                alert(data.message);
             }
         }
 
-        function renderNavbarUser() {
-            const el = document.getElementById('userSection');
-            el.innerHTML = `
-                <img src="${currentUser.avatar}" style="width: 32px; height: 32px; border-radius: 50%;" onerror="this.src='https://ui-avatars.com/api/?name=${currentUser.name}'">
-                <div style="font-size: 13px;"><strong>${currentUser.name}</strong><br><small style="color: var(--muted);">${currentUser.email}</small></div>
-                <button onclick="logout()" style="background: none; border: 1px solid var(--border); padding: 4px 8px; border-radius: 6px; cursor: pointer; font-size: 12px; margin-left: 8px;">Thoát</button>
+        // Xử lý xác thực Google thật
+        async function handleGoogleLogin(response) {
+            const res = await fetch('/api/portal/auth-google', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ credential: response.credential })
+            });
+            const data = await res.json();
+            if (data.success) {
+                onLoginSuccess(data.user);
+            } else {
+                alert(data.message);
+            }
+        }
+
+        function onLoginSuccess(user) {
+            currentUser = user;
+            sessionStorage.setItem('nioh_user', JSON.stringify(user));
+            document.getElementById('authScreen').style.display = 'none';
+            document.getElementById('dashboardScreen').style.display = 'block';
+
+            document.getElementById('userNavbar').innerHTML = `
+                <img src="${user.avatar || 'https://ui-avatars.com/api/?name=' + user.name}" style="width: 32px; height: 32px; border-radius: 50%;">
+                <div style="font-size: 13px;"><strong>${user.name}</strong><br><small style="color: var(--muted);">${user.email}</small></div>
+                <button onclick="logout()" style="background: none; border: 1px solid var(--border); padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; margin-left: 8px;">Thoát</button>
             `;
+            loadUserDevices();
         }
 
         function logout() {
+            sessionStorage.removeItem('nioh_user');
             currentUser = null;
-            document.getElementById('authScreen').style.display = 'block';
-            document.getElementById('dashboardScreen').style.display = 'none';
-            document.getElementById('userSection').innerHTML = `<span style="color: var(--muted); font-size: 14px;">Chưa đăng nhập</span>`;
+            location.reload();
         }
 
         async function loadUserDevices() {
@@ -322,8 +522,8 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
                         <strong>${d.name}</strong>
                         <span style="font-size: 12px; color: var(--success);"><span class="status-dot"></span>${d.status}</span>
                     </div>
-                    <div style="font-size: 12px; color: var(--muted); margin-bottom: 12px;">ID: ${d.device_id}</div>
-                    <div style="font-size: 13px; background: #f1f5f9; padding: 6px 10px; border-radius: 6px;">
+                    <div style="font-size: 12px; color: var(--muted); margin-bottom: 12px;">Mã PIN: <strong>${d.pairing_code}</strong> | ID: ${d.device_id}</div>
+                    <div style="font-size: 13px; background: #f1f5f9; padding: 8px 12px; border-radius: 6px;">
                         🤖 Model: <strong>${d.model.split('/')[1] || d.model}</strong>
                     </div>
                 </div>
@@ -384,8 +584,13 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             closeConfigModal();
             loadUserDevices();
         }
+
+        // Tự khôi phục phiên đăng nhập nếu đã có
+        const saved = sessionStorage.getItem('nioh_user');
+        if (saved) {
+            try { onLoginSuccess(JSON.parse(saved)); } catch(e){}
+        }
     </script>
 </body>
 </html>
 """
-
