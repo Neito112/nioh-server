@@ -6,9 +6,6 @@ strFolder = objFSO.GetParentFolderName(objFile)
 
 WshShell.CurrentDirectory = strFolder
 
-Set oEnv = WshShell.Environment("PROCESS")
-oEnv("PYTHONPATH") = strFolder
-
 Dim pyExe
 If objFSO.FileExists(strFolder & "\.venv\Scripts\pythonw.exe") Then
     pyExe = strFolder & "\.venv\Scripts\pythonw.exe"
@@ -20,9 +17,7 @@ Else
     pyExe = "pythonw.exe"
 End If
 
-' Chay backend server an cua so
-WshShell.Run """" & pyExe & """ -m server.desktop_app", 0, False
+scriptPath = strFolder & "\server\desktop_app.py"
 
-' Cho server khoi dong va mo trinh duyet
-WScript.Sleep 1500
-WshShell.Run "cmd /c start http://localhost:8001", 0, False
+' Chay backend server an cua so (chinh python se mo trinh duyet 1 lan duy nhat khi san sang)
+WshShell.Run """" & pyExe & """ """ & scriptPath & """", 0, False

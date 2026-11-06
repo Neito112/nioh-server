@@ -1,11 +1,10 @@
 """
 Cloudflare Tunnel Manager & Web OAuth Login
 -------------------------------------------
-Tự động:
-  1. Kiểm tra / Tải cloudflared chính thức
-  2. Đăng nhập qua Web chính thức: https://dash.cloudflare.com
-  3. Quản lý chứng chỉ cert.pem và Named Tunnel
-  4. Hỗ trợ fallback Quick Tunnel (trycloudflare.com) nếu chưa đăng nhập
+1. Kiểm tra / Tải cloudflared chính thức
+2. Mở web chính thức https://dash.cloudflare.com để người dùng đăng nhập & cấp chứng chỉ cert.pem
+3. Quản lý chứng chỉ cert.pem và Named Tunnel
+4. Yêu cầu bắt buộc đăng nhập Cloudflare trước khi tạo tunnel công khai
 """
 
 import os
@@ -13,18 +12,18 @@ import sys
 import json
 import shutil
 import asyncio
-import platform
 import logging
 import subprocess
 import re
+import time
 
 logger = logging.getLogger("nioh.cf_tunnel")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CF_DIR = os.path.join(BASE_DIR, ".cloudflared")
 CF_BIN = os.path.join(CF_DIR, "cloudflared.exe" if sys.platform == "win32" else "cloudflared")
+LOGIN_LOG = os.path.join(CF_DIR, "login.log")
 
-# Đường dẫn chứng chỉ gốc của Cloudflare sau khi đăng nhập web
 USER_HOME = os.path.expanduser("~")
 SYSTEM_CERT_PATH = os.path.join(USER_HOME, ".cloudflared", "cert.pem")
 LOCAL_CERT_PATH = os.path.join(CF_DIR, "cert.pem")
@@ -36,15 +35,15 @@ _tunnel_proc = None
 
 def get_cert_path() -> str:
     """Trả về đường dẫn cert.pem nếu đã tồn tại."""
-    if os.path.exists(SYSTEM_CERT_PATH):
+    if os.path.exists(SYSTEM_CERT_PATH) and os.path.getsize(SYSTEM_CERT_PATH) > 0:
         return SYSTEM_CERT_PATH
-    if os.path.exists(LOCAL_CERT_PATH):
+    if os.path.exists(LOCAL_CERT_PATH) and os.path.getsize(LOCAL_CERT_PATH) > 0:
         return LOCAL_CERT_PATH
     return ""
 
 
 def is_cloudflare_logged_in() -> bool:
-    """Kiểm tra xem máy này đã đăng nhập và cấp chứng chỉ từ Cloudflare chưa."""
+    """Kiểm tra máy này đã đăng nhập và cấp chứng chỉ từ Cloudflare chưa."""
     cert = get_cert_path()
     return bool(cert and os.path.exists(cert) and os.path.getsize(cert) > 0)
 
@@ -54,7 +53,7 @@ async def ensure_cloudflared():
     if os.path.exists(CF_BIN):
         return
 
-    # Kiểm tra trong Program Files nếu là Windows
+    # Kiểm tra trong Program Files
     installed_cf = r"C:\Program Files (x86)\cloudflared\cloudflared.exe"
     if os.path.exists(installed_cf):
         os.makedirs(CF_DIR, exist_ok=True)
@@ -68,14 +67,14 @@ async def ensure_cloudflared():
         return
 
 
-async def start_web_login() -> dict:
+def start_web_login() -> dict:
     """
     Gọi `cloudflared tunnel login`.
     Mở trình duyệt trực tiếp vào https://dash.cloudflare.com/argotunnel?...
     để người dùng đăng nhập tài khoản Cloudflare chính chủ.
     """
     global _login_proc
-    await ensure_cloudflared()
+    os.makedirs(CF_DIR, exist_ok=True)
 
     if is_cloudflare_logged_in():
         return {
@@ -85,35 +84,38 @@ async def start_web_login() -> dict:
             "cert_path": get_cert_path(),
         }
 
-    # Hủy tiến trình login cũ nếu đang chạy dở
+    # Hủy tiến trình login cũ nếu đang chạy
     if _login_proc:
         try:
             _login_proc.terminate()
         except Exception:
             pass
 
-    _login_proc = await asyncio.create_subprocess_exec(
-        CF_BIN, "tunnel", "login",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE
+    # Ghi log ra file để đọc URL không bị nghẽn buffer trên Windows
+    log_file = open(LOGIN_LOG, "w", encoding="utf-8")
+    _login_proc = subprocess.Popen(
+        [CF_BIN, "tunnel", "login"],
+        stdout=log_file,
+        stderr=subprocess.STDOUT,
+        text=True
     )
 
+    # Đợi 2 giây để cloudflared in URL
+    time.sleep(2)
     auth_url = ""
-    # Đọc output để trích xuất URL đăng nhập Cloudflare
-    for _ in range(25):
-        line = await asyncio.wait_for(_login_proc.stderr.readline(), timeout=5)
-        text = line.decode("utf-8", errors="replace").strip()
-        logger.info(f"CF Login: {text}")
-        if "dash.cloudflare.com" in text:
-            m = re.search(r'https://dash\.cloudflare\.com/argotunnel\?[^\s]+', text)
+    try:
+        with open(LOGIN_LOG, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read()
+            m = re.search(r'https://dash\.cloudflare\.com/argotunnel\?[^\s]+', content)
             if m:
                 auth_url = m.group(0)
-                break
+    except Exception as e:
+        logger.warning(f"Lỗi đọc login log: {e}")
 
     if not auth_url:
         auth_url = "https://dash.cloudflare.com"
 
-    # Mở trình duyệt vào trang web chính thức Cloudflare
+    # Mở trình duyệt vào link chính thức của Cloudflare
     try:
         if sys.platform == "win32":
             os.system(f'start "" "{auth_url}"')
@@ -127,7 +129,7 @@ async def start_web_login() -> dict:
         "success": True,
         "status": "waiting_user_auth",
         "auth_url": auth_url,
-        "message": "Đã mở trang đăng nhập Cloudflare trên trình duyệt. Vui lòng chọn domain để ủy quyền!",
+        "message": "Đang mở trang web dash.cloudflare.com trên trình duyệt. Vui lòng đăng nhập và chọn domain để ủy quyền!",
     }
 
 
@@ -144,55 +146,24 @@ def check_login_status() -> dict:
 async def setup_tunnel(local_port: int, domain: str = "") -> str:
     """
     Tạo và chạy Cloudflare Tunnel:
-    - Nếu đã đăng nhập Cloudflare và có domain -> chạy Named Tunnel chính chủ
-    - Nếu chưa -> tự động chạy Quick Tunnel (trycloudflare.com)
+    BẮT BUỘC phải đăng nhập tài khoản Cloudflare trước.
     """
     global _tunnel_proc
     await ensure_cloudflared()
 
-    if is_cloudflare_logged_in() and domain:
-        return await _run_named_tunnel(local_port, domain)
-    else:
-        return await _run_quick_tunnel(local_port)
+    if not is_cloudflare_logged_in():
+        raise RuntimeError("CHƯA ĐĂNG NHẬP CLOUDFLARE: Bạn cần nhấp nút 'ĐĂNG NHẬP QUA WEB CLOUDFLARE' trước!")
 
-
-async def _run_quick_tunnel(local_port: int) -> str:
-    global _tunnel_proc
-    logger.info(f"Chạy Cloudflare Quick Tunnel cho port {local_port}...")
-
-    _tunnel_proc = await asyncio.create_subprocess_exec(
-        CF_BIN, "tunnel", "--url", f"http://localhost:{local_port}",
-        stdout=asyncio.subprocess.PIPE,
-        stderr=asyncio.subprocess.PIPE,
-    )
-
-    url = None
-    for _ in range(60):
-        line = await asyncio.wait_for(_tunnel_proc.stderr.readline(), timeout=5)
-        text = line.decode("utf-8", errors="replace")
-        if "trycloudflare.com" in text:
-            m = re.search(r'https://[\w-]+\.trycloudflare\.com', text)
-            if m:
-                url = m.group(0)
-                break
-
-    if not url:
-        _tunnel_proc.kill()
-        raise RuntimeError("Không thể nhận URL từ Cloudflare Tunnel.")
-
-    wss_url = url.replace("https://", "wss://") + "/xiaozhi/v1/"
-    logger.info(f"Quick Tunnel sẵn sàng: {wss_url}")
-    return wss_url
-
-
-async def _run_named_tunnel(local_port: int, domain: str) -> str:
-    global _tunnel_proc
     cert = get_cert_path()
-    logger.info(f"Chạy Named Tunnel '{TUNNEL_NAME}' với domain {domain}...")
+    if not domain:
+        # Nếu chưa điền domain, tự động lấy domain đầu tiên hoặc cảnh báo
+        raise RuntimeError("Vui lòng nhập tên miền riêng (Domain) bạn đã ủy quyền trên Cloudflare (ví dụ: voice.yourdomain.com)!")
+
+    logger.info(f"Khởi tạo Named Tunnel '{TUNNEL_NAME}' với domain {domain}...")
 
     # Tạo tunnel nếu chưa có
     subprocess.run([CF_BIN, "tunnel", "--origincert", cert, "create", TUNNEL_NAME], capture_output=True, text=True)
-    subprocess.run([CF_BIN, "tunnel", "--origincert", cert, "route", "dns", TUNNEL_NAME, domain], capture_output=True, text=True)
+    subprocess.run([CF_BIN, "tunnel", "--origincert", cert, "route", "dns", "-f", TUNNEL_NAME, domain], capture_output=True, text=True)
 
     _tunnel_proc = await asyncio.create_subprocess_exec(
         CF_BIN, "tunnel", "--url", f"http://localhost:{local_port}", "run", TUNNEL_NAME,

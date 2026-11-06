@@ -16,6 +16,13 @@ Ni-Oh Server Gateway & Portal Application
 
 import os
 import sys
+
+# Khac phuc loi pythonw.exe tren Windows khi stdout/stderr la None
+if sys.stdout is None:
+    sys.stdout = open(os.devnull, "w")
+if sys.stderr is None:
+    sys.stderr = open(os.devnull, "w")
+
 import json
 import asyncio
 import logging
@@ -46,8 +53,33 @@ from server.web_portal import (
 logger = logging.getLogger("nioh.main_app")
 
 
-def create_application():
+def is_port_in_use(port: int) -> bool:
+    import socket
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+        return s.connect_ex(("127.0.0.1", port)) == 0
+
+
+def open_browser(url: str):
+    try:
+        if hasattr(os, "startfile"):
+            os.startfile(url)
+        elif sys.platform == "win32":
+            os.system(f'start "" "{url}"')
+        else:
+            webbrowser.open(url)
+    except Exception as e:
+        logger.warning(f"Không thể tự mở trình duyệt: {e}")
+
+
+async def on_startup_open_browser(app):
+    port = app.get("port", 8001)
+    await asyncio.sleep(0.3)
+    open_browser(f"http://localhost:{port}")
+
+
+def create_application(port: int = 8001):
     app = web.Application()
+    app["port"] = port
 
     # ── 1. CỔNG SERVER (Desktop App) ─────────────────────────
     app.router.add_get("/", lambda req: web.Response(text=HTML_GATEWAY_APP, content_type="text/html"))
@@ -68,32 +100,34 @@ def create_application():
     return app
 
 
-def is_port_in_use(port: int) -> bool:
-    import socket
-    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-        return s.connect_ex(("127.0.0.1", port)) == 0
+async def run_server(port: int = 8001):
+    if is_port_in_use(port):
+        open_browser(f"http://localhost:{port}")
+        return
 
-
-def open_browser(url: str):
     try:
-        if sys.platform == "win32":
-            os.system(f'start "" "{url}"')
-        else:
-            webbrowser.open(url)
-    except Exception:
-        pass
+        app = create_application(port)
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", port)
+        await site.start()
+
+        open_browser(f"http://localhost:{port}")
+
+        while True:
+            await asyncio.sleep(3600)
+    except Exception as e:
+        logger.error(f"Lỗi khởi chạy máy chủ: {e}")
+
+
 
 
 if __name__ == "__main__":
-    port = 8001
-    if is_port_in_use(port):
-        print(f"[INFO] Server đã chạy sẵn tại http://localhost:{port}. Đang mở trình duyệt...")
-        open_browser(f"http://localhost:{port}")
-        sys.exit(0)
+    try:
+        asyncio.run(run_server(8001))
+    except KeyboardInterrupt:
+        pass
 
-    app = create_application()
-    print(f"\n[OK] Ni-Oh Server Gateway đang chạy tại: http://localhost:{port}")
-    print(f"[OK] Web Portal Quản lý Thiết bị tại: http://localhost:{port}/portal\n")
-    
-    open_browser(f"http://localhost:{port}")
-    web.run_app(app, host="0.0.0.0", port=port, print=None, access_log=None)
+
+
+
