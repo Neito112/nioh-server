@@ -31,9 +31,12 @@ if sys.stderr is None:
     sys.stderr = open(os.devnull, "w")
 
 import json
+import random
+import sqlite3
 import asyncio
 import logging
 import webbrowser
+import aiohttp
 from aiohttp import web
 from dotenv import load_dotenv
 
@@ -113,14 +116,45 @@ async def handle_root_request(request):
 
 
 async def handle_ota_request(request):
-    """Endpoint trả về cấu hình OTA cho ESP32 chuẩn theo xiaozhi-esp32-server."""
+    """
+    Endpoint trả về cấu hình OTA cho ESP32 chuẩn theo xiaozhi-esp32-server và xiaozhi-esp32_vietnam.
+    Hỗ trợ hiển thị mã PIN ghép đôi trên màn hình LCD mạch khi mạch chưa được kích hoạt.
+    """
     ws_url = GATEWAY_STATE.get("wss_url")
+    host = request.host
     if not ws_url:
-        host = request.host
         scheme = "wss" if request.scheme == "https" or "trycloudflare.com" in host else "ws"
         ws_url = f"{scheme}://{host}/xiaozhi/v1/"
 
-    return web.json_response({
+    # Kiểm tra Device-Id từ HTTP Header hoặc request body
+    device_id = request.headers.get("Device-Id", "").strip()
+    if not device_id and request.method == "POST":
+        try:
+            body = await request.json()
+            device_id = body.get("mac_address") or body.get("device_id") or ""
+        except Exception:
+            pass
+
+    is_bound = False
+    pin_code = None
+    if device_id:
+        db_file = os.path.join(BASE_DIR, "data", "portal.db")
+        conn = sqlite3.connect(db_file)
+        c = conn.cursor()
+        c.execute("CREATE TABLE IF NOT EXISTS devices (device_id TEXT PRIMARY KEY, user_id TEXT, bot_name TEXT, pairing_code TEXT, agent_id TEXT, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
+        c.execute("SELECT user_id, pairing_code FROM devices WHERE device_id = ?", (device_id,))
+        row = c.fetchone()
+        if row and row[0]:
+            is_bound = True
+        elif row and row[1]:
+            pin_code = row[1]
+        else:
+            pin_code = f"{random.randint(100000, 999999)}"
+            c.execute("INSERT OR REPLACE INTO devices (device_id, pairing_code) VALUES (?, ?)", (device_id, pin_code))
+            conn.commit()
+        conn.close()
+
+    res = {
         "server_time": {
             "timestamp": int(round(time.time() * 1000)),
             "timezone_offset": 420  # +7 GMT cho Việt Nam (7 * 60 phút)
@@ -133,7 +167,91 @@ async def handle_ota_request(request):
             "url": ws_url,
             "token": ""
         }
-    })
+    }
+
+    # Nếu thiết bị chưa ghép đôi, trả về activation payload để firmware xiaozhi-esp32_vietnam hiển thị mã PIN trên màn hình
+    if not is_bound and pin_code:
+        res["activation"] = {
+            "code": pin_code,
+            "message": f"Mã PIN: {pin_code}. Nhập trên Web để ghép đôi.",
+            "timeout_ms": 120000
+        }
+
+    return web.json_response(res)
+
+
+async def handle_music_stream(request: web.Request):
+    """
+    Endpoint cung cấp dịch vụ âm nhạc trực tuyến cho firmware xiaozhi-esp32_vietnam.
+    Chuẩn API: GET /stream_pcm?song=<tên bài hát>&artist=<ca sĩ>
+    Trả về định dạng JSON theo đúng esp32_music.cc:
+    {
+        "artist": "...",
+        "title": "...",
+        "audio_url": "...",
+        "lyric_url": "",
+        "duration": 210,
+        "success": true
+    }
+    """
+    song = request.query.get("song", "").strip()
+    artist = request.query.get("artist", "").strip()
+
+    if not song:
+        return web.json_response({
+            "success": False,
+            "message": "Vui lòng cung cấp tên bài hát qua tham số song",
+            "audio_url": ""
+        }, status=400)
+
+    query = f"{song} {artist}".strip()
+    try:
+        from server.tools.free_music import search_and_get_audio_stream
+        res = await search_and_get_audio_stream(query)
+        if res.get("success"):
+            return web.json_response({
+                "artist": res.get("artist") or artist or "Nhiều ca sĩ",
+                "title": res.get("title") or song,
+                "audio_url": res.get("audio_url", ""),
+                "lyric_url": "",
+                "duration": res.get("duration") or 210,
+                "success": True
+            })
+        else:
+            return web.json_response({
+                "artist": artist,
+                "title": song,
+                "audio_url": "",
+                "message": res.get("message", "Không tìm thấy bài hát"),
+                "success": False
+            })
+    except Exception as e:
+        logger.error(f"Lỗi API âm nhạc /stream_pcm: {e}")
+        return web.json_response({"success": False, "message": str(e), "audio_url": ""}, status=500)
+
+
+async def handle_proxy_stream(request: web.Request):
+    """Proxy luồng âm thanh MP3 cho ESP32 khi cần bypass kết nối."""
+    url = request.query.get("url")
+    if not url:
+        return web.Response(text="Missing url parameter", status=400)
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=30) as resp:
+                headers = {
+                    "Content-Type": resp.headers.get("Content-Type", "audio/mpeg"),
+                    "Accept-Ranges": "bytes"
+                }
+                response = web.StreamResponse(status=resp.status, headers=headers)
+                await response.prepare(request)
+                async for chunk in resp.content.iter_chunked(4096):
+                    await response.write(chunk)
+                await response.write_eof()
+                return response
+    except Exception as e:
+        logger.error(f"Lỗi proxy stream MP3: {e}")
+        return web.Response(text=str(e), status=500)
 
 
 async def handle_vision_explain(request: web.Request):
@@ -230,6 +348,10 @@ def create_application(port: int = 8001):
     app.router.add_get("/mcp/vision/explain", handle_vision_explain)
     app.router.add_post("/mcp/vision/explain", handle_vision_explain)
     app.router.add_route("OPTIONS", "/mcp/vision/explain", handle_vision_explain)
+
+    # ── 5. CỔNG DỊCH VỤ ÂM NHẠC TRỰC TUYẾN CHO XIAOZHI-ESP32_VIETNAM
+    app.router.add_get("/stream_pcm", handle_music_stream)
+    app.router.add_get("/mp3/proxy/stream", handle_proxy_stream)
 
     return app
 

@@ -268,6 +268,7 @@ class TestNiOhDualServer(AioHTTPTestCase):
         self.assertIn("get_vietnam_datetime", tool_names)
         self.assertIn("web_search", tool_names)
         self.assertIn("pc_control", tool_names)
+        self.assertIn("play_radio", tool_names)
 
         # 2. Test execution of server tools
         res_weather = await execute_server_tool("get_weather", {"location": "Đà Nẵng"})
@@ -287,6 +288,21 @@ class TestNiOhDualServer(AioHTTPTestCase):
         self.assertEqual(vis_post.status, 200)
         vis_post_data = await vis_post.json()
         self.assertEqual(vis_post_data["code"], 0)
+
+        # 4. Test xiaozhi-esp32_vietnam Music API (/stream_pcm)
+        music_resp = await self.client.get("/stream_pcm?song=Di+Ve+Nha&artist=Den+Vau")
+        self.assertEqual(music_resp.status, 200)
+        music_data = await music_resp.json()
+        self.assertIn("title", music_data)
+        self.assertIn("artist", music_data)
+        self.assertIn("audio_url", music_data)
+
+        # 5. Test OTA Activation Pin Generation for xiaozhi-esp32_vietnam
+        ota_req = await self.client.get("/xiaozhi/ota/", headers={"Device-Id": "A1:B2:C3:D4:E5:F6"})
+        self.assertEqual(ota_req.status, 200)
+        ota_info = await ota_req.json()
+        self.assertIn("activation", ota_info)
+        self.assertEqual(len(ota_info["activation"]["code"]), 6)
 
 
 if __name__ == "__main__":

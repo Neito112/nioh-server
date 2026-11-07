@@ -397,6 +397,13 @@ async def process_vietnamese_query(user_text: str, dev_info: dict, mcp_client: D
                     # Kiểm tra xem là công cụ máy chủ hay công cụ phần cứng MCP
                     if fn_name in ("get_weather", "get_vietnam_news", "get_vietnam_datetime", "web_search", "pc_control"):
                         tool_output = await execute_server_tool(fn_name, fn_args)
+                    elif fn_name == "play_radio":
+                        # Điều khiển kênh radio VOV trên mạch xiaozhi-esp32_vietnam qua MCP
+                        st_name = fn_args.get("station_name", "VOV1")
+                        if mcp_client:
+                            tool_output = await mcp_client.call_tool("self.radio.play_station", {"station_name": st_name})
+                        else:
+                            tool_output = f"Đã phát lệnh mở kênh phát thanh {st_name}."
                     elif mcp_client:
                         # Gọi công cụ phần cứng qua giao thức MCP trên mạch ESP32
                         tool_output = await mcp_client.call_tool(fn_name, fn_args)
@@ -469,7 +476,10 @@ async def handle_xiaozhi_websocket(request: web.Request) -> web.WebSocketRespons
     pipeline = AudioPipeline()
     dev_info = get_device_info(device_id)
     session_id = f"sess_{os.urandom(6).hex()}"
-    mcp_client = DeviceMCPClient(ws, device_id)
+    host = request.host
+    scheme = "https" if request.scheme == "https" or "trycloudflare.com" in host else "http"
+    host_url = f"{scheme}://{host}"
+    mcp_client = DeviceMCPClient(ws, device_id, host_url=host_url)
 
     # Luồng kiểm tra ghép đôi thiết bị (Device Binding Flow)
     if not dev_info["is_bound"]:

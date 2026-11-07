@@ -716,8 +716,13 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
                 </div>
 
                 <div class="form-group">
-                    <label>Cấu Trúc JSON Cấu Hình Firmware Mẫu:</label>
-                    <textarea id="fwJsonConfig" class="mono-input" rows="6" readonly style="resize: none;"></textarea>
+                    <label>Địa Chỉ Máy Chủ Nhạc (Music Server /stream_pcm):</label>
+                    <input type="text" id="fwMusicUrl" class="mono-input" readonly>
+                </div>
+
+                <div class="form-group">
+                    <label>Cấu Trúc JSON Cấu Hình Firmware Mẫu (xiaozhi-esp32_vietnam):</label>
+                    <textarea id="fwJsonConfig" class="mono-input" rows="8" readonly style="resize: none;"></textarea>
                 </div>
             </div>
         </div>
@@ -1162,9 +1167,11 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             const wssOrigin = origin.replace('https://', 'wss://').replace('http://', 'ws://');
             const wsUrl = `${wssOrigin}/xiaozhi/v1/`;
             const otaUrl = `${origin}/xiaozhi/ota/`;
+            const musicUrl = `${origin}`;
 
             document.getElementById('fwWssUrl').value = wsUrl;
             document.getElementById('fwOtaUrl').value = otaUrl;
+            document.getElementById('fwMusicUrl').value = musicUrl;
 
             const configObj = {
                 "websocket": {
@@ -1172,6 +1179,9 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
                 },
                 "ota": {
                     "url": otaUrl
+                },
+                "wifi": {
+                    "music_url": musicUrl
                 }
             };
             document.getElementById('fwJsonConfig').value = JSON.stringify(configObj, null, 2);

@@ -113,6 +113,23 @@ SERVER_TOOLS_SCHEMA = [
                 "required": ["command"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "play_radio",
+            "description": "Phát kênh phát thanh Radio VOV Việt Nam trên mạch ESP32. Sử dụng khi người dùng yêu cầu nghe đài, mở VOV, radio thời sự hoặc giao thông.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "station_name": {
+                        "type": "string",
+                        "description": "Mã kênh: VOV1 (Thời sự), VOV2 (Văn hóa), VOV3 (Âm nhạc giải trí), VOV_GT_HN (Giao thông Hà Nội), VOV_GT_HCM (Giao thông TP.HCM), VOV_MEKONG (Mekong FM), VOV5 (Đối ngoại), BBC, NPR."
+                    }
+                },
+                "required": ["station_name"]
+            }
+        }
     }
 ]
 
@@ -159,9 +176,10 @@ class DeviceMCPClient:
     Quản lý phiên MCP Client cho thiết bị phần cứng ESP32.
     Thực hiện giao thức JSON-RPC 2.0 qua kênh WebSocket.
     """
-    def __init__(self, ws, device_id: str):
+    def __init__(self, ws, device_id: str, host_url: str = ""):
         self.ws = ws
         self.device_id = device_id
+        self.host_url = host_url
         self.device_tools: List[dict] = []
         self._next_id = 1
         self._pending_calls: Dict[int, asyncio.Future] = {}
@@ -172,8 +190,9 @@ class DeviceMCPClient:
         return req_id
 
     async def initialize(self):
-        """Gửi thông điệp bắt tay khởi tạo MCP tới ESP32."""
+        """Gửi thông điệp bắt tay khởi tạo MCP tới ESP32 kèm điểm cuối vision."""
         req_id = self.get_next_id()
+        vision_url = f"{self.host_url}/mcp/vision/explain" if self.host_url else "/mcp/vision/explain"
         msg = {
             "type": "mcp",
             "jsonrpc": "2.0",
@@ -183,7 +202,11 @@ class DeviceMCPClient:
                 "protocolVersion": "2024-11-05",
                 "capabilities": {
                     "roots": {"listChanged": True},
-                    "sampling": {}
+                    "sampling": {},
+                    "vision": {
+                        "url": vision_url,
+                        "token": ""
+                    }
                 },
                 "clientInfo": {
                     "name": "XiaoZhiVN-Server",
