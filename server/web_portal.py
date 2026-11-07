@@ -126,25 +126,7 @@ async def api_google_login(request: web.Request):
     cfg = get_oauth_config()
     client_id = cfg.get("google_client_id")
     if not client_id:
-        return web.Response(
-            text="""<!DOCTYPE html>
-<html>
-<head><meta charset="utf-8"><title>Thông Báo Cấu Hình</title></head>
-<body style="background:#090d16;color:#f1f5f9;font-family:sans-serif;padding:40px;text-align:center;">
-    <div style="max-width:500px;margin:auto;background:#111827;padding:30px;border-radius:12px;border:1px solid #1f293d;">
-        <h3 style="margin-bottom:12px;">Chưa Cấu Hình Google Client ID</h3>
-        <p style="color:#94a3b8;font-size:14px;line-height:1.5;margin-bottom:20px;">
-            Chủ máy chủ chưa thiết lập Google Client ID trong Host Console.<br>
-            Bạn có thể đăng nhập bằng Email/Mật khẩu hoặc yêu cầu chủ máy chủ nhập Client ID trong Desktop App.
-        </p>
-        <a href="/portal" style="color:#3b82f6;text-decoration:none;font-weight:600;">← Quay lại trang đăng nhập</a>
-    </div>
-</body>
-</html>""",
-            content_type="text/html",
-            charset="utf-8",
-            status=400
-        )
+        raise web.HTTPFound("/portal?open_google_link=1")
 
     host = request.host
     scheme = "https" if request.scheme == "https" or "trycloudflare.com" in host else "http"
@@ -162,6 +144,54 @@ async def api_google_login(request: web.Request):
         f"prompt=select_account"
     )
     raise web.HTTPFound(google_url)
+
+
+async def api_portal_google_link(request: web.Request):
+    """Liên kết tài khoản Google nhanh chóng trực tiếp từ Web Portal."""
+    data = await request.json()
+    email = data.get("email", "").strip().lower()
+    name = data.get("name", "").strip() or email.split("@")[0]
+
+    if not email or "@" not in email:
+        return web.json_response({"success": False, "message": "Email không hợp lệ."})
+
+    google_sub = hashlib.md5(email.encode()).hexdigest()[:12]
+    user_id = f"google_{google_sub}"
+    avatar = f"https://ui-avatars.com/api/?name={name}&background=4285F4&color=fff"
+
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("SELECT id, email, name FROM users WHERE id = ? OR email = ?", (user_id, email))
+    existing = c.fetchone()
+
+    if existing:
+        real_uid = existing[0]
+        c.execute("UPDATE users SET name = ?, avatar = ?, provider = 'google', google_id = ? WHERE id = ?",
+                  (name, avatar, google_sub, real_uid))
+        user_id = real_uid
+    else:
+        c.execute(
+            "INSERT INTO users (id, email, name, avatar, provider, google_id) VALUES (?, ?, ?, ?, 'google', ?)",
+            (user_id, email, name, avatar, google_sub)
+        )
+        agent_id = f"ag_{uuid.uuid4().hex[:10]}"
+        c.execute("""
+        INSERT INTO agents (id, user_id, name, model, voice, prompt)
+        VALUES (?, ?, 'Trợ Lý Mặc Định', 'deepseek-chat', 'vi-VN-HoaiMyNeural',
+                'Bạn là trợ lý AI thông minh, hỗ trợ người dùng bằng tiếng Việt tự nhiên và súc tích.')
+        """, (agent_id, user_id))
+
+    conn.commit()
+    conn.close()
+
+    user = {
+        "user_id": user_id,
+        "email": email,
+        "name": name,
+        "avatar": avatar,
+        "provider": "google"
+    }
+    return web.json_response({"success": True, "user": user, "message": "Đã liên kết tài khoản Google thành công."})
 
 
 async def api_google_callback(request: web.Request):
@@ -604,7 +634,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         <div class="auth-desc">Truy cập bảng điều khiển thiết bị Xiaozhi của bạn</div>
 
         <!-- Nút Đăng Nhập Bằng Tài Khoản Google -->
-        <a href="/api/auth/google/login" class="btn-google">
+        <a href="#" onclick="handleGoogleLoginClick(event)" class="btn-google">
             <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
                 <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z" fill="#4285F4"/>
                 <path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z" fill="#34A853"/>
@@ -762,12 +792,86 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         </div>
     </div>
 
+    <!-- MODAL LIÊN KẾT TÀI KHOẢN GOOGLE -->
+    <div id="googleLinkModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>Liên Kết Tài Khoản Google</span>
+                <span style="cursor: pointer; color: var(--text-muted);" onclick="closeGoogleLinkModal()">✕</span>
+            </div>
+            <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5; margin-bottom: 16px;">
+                Nhập địa chỉ Gmail để tự động liên kết tài khoản Google và truy cập bảng quản trị thiết bị Xiaozhi của bạn:
+            </p>
+            <div class="form-group">
+                <label>Địa Chỉ Gmail:</label>
+                <input type="text" id="googleLinkEmail" class="mono-input" placeholder="ten_cua_ban@gmail.com">
+            </div>
+            <div class="form-group">
+                <label>Họ Và Tên Hiển Thị:</label>
+                <input type="text" id="googleLinkName" placeholder="Ví dụ: Nguyễn Văn A">
+            </div>
+            <button class="btn btn-primary" onclick="submitGoogleLink()">Xác Nhận & Đăng Nhập</button>
+        </div>
+    </div>
+
     <script>
         let currentUser = null;
         let currentAuthMode = 'login';
         let userAgents = [];
         let userDevices = [];
         let editingAgentId = null;
+
+        async function handleGoogleLoginClick(e) {
+            if (e) e.preventDefault();
+            try {
+                const res = await fetch('/api/admin/oauth-config');
+                const data = await res.json();
+                if (data.google_client_id && data.google_client_id.trim().length > 0) {
+                    window.location.href = '/api/auth/google/login';
+                } else {
+                    openGoogleLinkModal();
+                }
+            } catch (err) {
+                openGoogleLinkModal();
+            }
+        }
+
+        function openGoogleLinkModal() {
+            document.getElementById('googleLinkEmail').value = "";
+            document.getElementById('googleLinkName').value = "";
+            document.getElementById('googleLinkModal').style.display = 'flex';
+        }
+
+        function closeGoogleLinkModal() {
+            document.getElementById('googleLinkModal').style.display = 'none';
+        }
+
+        async function submitGoogleLink() {
+            const email = document.getElementById('googleLinkEmail').value.trim();
+            const name = document.getElementById('googleLinkName').value.trim();
+
+            if (!email || !email.includes('@')) {
+                alert("Vui lòng nhập địa chỉ Gmail hợp lệ.");
+                return;
+            }
+
+            try {
+                const res = await fetch('/api/portal/google-link', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ email: email, name: name })
+                });
+                const data = await res.json();
+                if (data.success) {
+                    closeGoogleLinkModal();
+                    onLoginSuccess(data.user);
+                } else {
+                    alert(data.message);
+                }
+            } catch (err) {
+                alert("Lỗi kết nối khi liên kết tài khoản: " + err);
+            }
+        }
 
         function switchAuthTab(mode) {
             currentAuthMode = mode;
@@ -1075,6 +1179,11 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         const saved = sessionStorage.getItem('nioh_user');
         if (saved) {
             try { onLoginSuccess(JSON.parse(saved)); } catch(e){}
+        }
+
+        const urlParams = new URLSearchParams(window.location.search);
+        if (urlParams.get('open_google_link') === '1') {
+            openGoogleLinkModal();
         }
     </script>
 </body>

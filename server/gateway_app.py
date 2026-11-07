@@ -2,16 +2,25 @@
 Ni-Oh Server Gateway (Desktop App)
 ----------------------------------
 Thành phần 1: APP SERVER (Cổng Máy Chủ & Quản Trị Hệ Thống)
-Chức năng:
-1. Mở Cổng Server & Kích Hoạt Cloudflare Anycast Tunnel
-   - Quản lý cổng nội bộ (Port 8001) và đường truyền WebSocket/OTA
-   - Kích hoạt Cloudflare và XUẤT LINK SERVER cho Web quản lý và Mạch Xiaozhi
-   - Giám sát các kết nối WebSocket đang hoạt động thời gian thực
+Chức năng chính:
+1. Trạng Thái & Liên Kết Tài Khoản Cloudflare:
+   - Hiển thị rõ trạng thái: Đã liên kết (Tài khoản / Token / cert.pem / Quick Tunnel) hoặc Chưa liên kết
+   - Hỗ trợ liên kết: Đăng nhập Web Cloudflare (OAuth), Nhập API Token, hoặc 1-Chạm Quick Tunnel
+   - Hỗ trợ Hủy liên kết tài khoản
 
-2. Quản Lý Data Người Dùng Bằng Tài Khoản Google
-   - Cấu hình Google OAuth (Client ID & Client Secret) để cấp quyền cho Web Portal
-   - Quản lý danh sách người dùng đăng nhập hệ thống (Google / Local)
-   - Sao lưu (Backup) và Phục hồi (Restore) toàn bộ cơ sở dữ liệu hệ thống
+2. Mở Cổng Server & Xuất Link Cloudflare:
+   - Mặc định cổng server TẮT khi khởi động
+   - CHỈ mở cổng và cấp link khi người dùng ấn nút "Mở Cổng Server" trong ứng dụng
+   - Xuất 3 link: Web Server (cho người dùng), WebSocket (cho mạch Xiaozhi), OTA Firmware
+
+3. Quản Lý Data Người Dùng Bằng Tài Khoản Google:
+   - Danh sách tài khoản người dùng đã đăng ký/liên kết (Google / Email)
+   - Xem số lượng Bot và Thiết bị của từng tài khoản
+   - Xóa tài khoản người dùng khỏi hệ thống
+   - Sao lưu dữ liệu (Backup JSON) & Phục hồi dữ liệu (Restore JSON)
+
+4. Giám Sát Kết Nối Thời Gian Thực:
+   - Danh sách mạch ESP32 đang kết nối WebSocket trực tiếp (IP, Device ID, Uptime, Gói tin)
 """
 
 import os
@@ -29,13 +38,17 @@ BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "data", "portal.db")
 
 from cloudflare.tunnel import (
+    start_web_login,
+    check_login_status,
+    verify_cf_token,
     activate_quick_tunnel_link,
+    unlink_cloudflare,
     setup_tunnel,
     stop_tunnel
 )
 from server.voice_engine import get_live_connections
 
-# Trạng thái Cổng Server
+# Trạng thái Cổng Server (Mặc định luôn là False khi khởi chạy)
 GATEWAY_STATE = {
     "server_running": False,
     "cf_domain": "",
@@ -45,34 +58,11 @@ GATEWAY_STATE = {
 }
 
 
-def get_oauth_config() -> dict:
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS oauth_config (key TEXT PRIMARY KEY, value TEXT)")
-    c.execute("SELECT key, value FROM oauth_config")
-    rows = dict(c.fetchall())
-    conn.close()
-    return {
-        "google_client_id": rows.get("google_client_id", os.environ.get("GOOGLE_CLIENT_ID", "")),
-        "google_client_secret": rows.get("google_client_secret", os.environ.get("GOOGLE_CLIENT_SECRET", ""))
-    }
-
-
-def save_oauth_config(data: dict):
-    conn = sqlite3.connect(DB_PATH)
-    c = conn.cursor()
-    c.execute("CREATE TABLE IF NOT EXISTS oauth_config (key TEXT PRIMARY KEY, value TEXT)")
-    for k, v in data.items():
-        c.execute("INSERT OR REPLACE INTO oauth_config (key, value) VALUES (?, ?)", (k, str(v).strip()))
-    conn.commit()
-    conn.close()
-
-
-# ── REST API MỞ CỔNG VÀ ĐIỀU KHIỂN GATEWAY ─────────────────────────
+# ── REST API TRẠNG THÁI & LIÊN KẾT CLOUDFLARE ──────────────────────
 
 async def api_get_gateway_status(request):
+    cf_status = check_login_status()
     live_stats = get_live_connections()
-    oauth_cfg = get_oauth_config()
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
@@ -83,27 +73,73 @@ async def api_get_gateway_status(request):
     c.execute("CREATE TABLE IF NOT EXISTS devices (device_id TEXT PRIMARY KEY, user_id TEXT, agent_id TEXT, name TEXT, pairing_code TEXT, status TEXT DEFAULT 'offline', created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)")
     c.execute("SELECT count(*) FROM devices")
     total_devices = c.fetchone()[0]
+
+    c.execute("CREATE TABLE IF NOT EXISTS oauth_config (key TEXT PRIMARY KEY, value TEXT)")
+    c.execute("SELECT key, value FROM oauth_config")
+    oauth_rows = dict(c.fetchall())
     conn.close()
+
+    oauth_data = {
+        "google_client_id": oauth_rows.get("google_client_id", os.environ.get("GOOGLE_CLIENT_ID", "")),
+        "google_client_secret": oauth_rows.get("google_client_secret", os.environ.get("GOOGLE_CLIENT_SECRET", ""))
+    }
 
     return web.json_response({
         **GATEWAY_STATE,
         "local_port": request.app.get("port", 8001),
+        "cf_logged_in": cf_status["logged_in"],
+        "cf_account": cf_status["account"],
+        "cf_mode": cf_status["mode"],
         "live_clients": live_stats["connections"],
         "active_clients_count": live_stats["active_count"],
         "total_users_count": total_users,
         "total_devices_count": total_devices,
-        "oauth": oauth_cfg,
+        "oauth": oauth_data,
     })
 
 
+async def api_link_quick(request):
+    """Liên kết 1-chạm qua mạng lưới Cloudflare Anycast."""
+    res = activate_quick_tunnel_link()
+    return web.json_response(res)
+
+
+async def api_link_token(request):
+    """Liên kết tài khoản qua Cloudflare API Token."""
+    data = await request.json()
+    token = data.get("token", "").strip()
+    res = verify_cf_token(token)
+    return web.json_response(res)
+
+
+async def api_start_web_login(request):
+    """Mở trình duyệt để đăng nhập ủy quyền Cloudflare qua Web."""
+    res = start_web_login()
+    return web.json_response(res)
+
+
+async def api_unlink_cloudflare(request):
+    """Hủy liên kết tài khoản Cloudflare."""
+    unlink_cloudflare()
+    GATEWAY_STATE["server_running"] = False
+    GATEWAY_STATE["portal_web_url"] = ""
+    GATEWAY_STATE["wss_url"] = ""
+    GATEWAY_STATE["ota_url"] = ""
+    return web.json_response({"success": True, "message": "Đã hủy liên kết Cloudflare."})
+
+
 async def api_toggle_gateway(request):
-    """Mở cổng Cloudflare và xuất các đường link server."""
+    """Mở hoặc đóng cổng Server Cloudflare (chỉ kích hoạt khi người dùng ấn nút)."""
     data = await request.json()
     action = data.get("action")
     domain = data.get("custom_domain", "").strip()
 
     if action == "start":
-        activate_quick_tunnel_link()
+        # Tự động kích hoạt liên kết nếu chưa liên kết
+        status = check_login_status()
+        if not status["logged_in"]:
+            activate_quick_tunnel_link()
+
         try:
             tunnel_res = await setup_tunnel(8001, domain=domain)
             GATEWAY_STATE["server_running"] = True
@@ -125,10 +161,10 @@ async def api_toggle_gateway(request):
         return web.json_response({"success": True, "state": GATEWAY_STATE})
 
 
-# ── REST API QUẢN LÝ DỮ LIỆU NGƯỜI DÙNG & GOOGLE OAUTH ────────────
+# ── REST API QUẢN LÝ DỮ LIỆU NGƯỜI DÙNG & SAO LƯU ──────────────────
 
 async def api_admin_get_users(request):
-    """Lấy danh sách người dùng đăng nhập hệ thống và số lượng bot sở hữu."""
+    """Lấy danh sách người dùng đã đăng ký và số lượng bot của họ."""
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
@@ -173,13 +209,33 @@ async def api_admin_delete_user(request):
     return web.json_response({"success": True, "message": "Đã xóa người dùng thành công."})
 
 
+async def api_admin_get_oauth(request):
+    """Lấy cấu hình Google OAuth hiện tại."""
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS oauth_config (key TEXT PRIMARY KEY, value TEXT)")
+    c.execute("SELECT key, value FROM oauth_config")
+    rows = dict(c.fetchall())
+    conn.close()
+    return web.json_response({
+        "success": True,
+        "google_client_id": rows.get("google_client_id", os.environ.get("GOOGLE_CLIENT_ID", "")),
+        "google_client_secret": rows.get("google_client_secret", os.environ.get("GOOGLE_CLIENT_SECRET", ""))
+    })
+
+
 async def api_admin_save_oauth(request):
     """Lưu cấu hình Google OAuth credentials."""
     data = await request.json()
-    save_oauth_config({
-        "google_client_id": data.get("google_client_id", "").strip(),
-        "google_client_secret": data.get("google_client_secret", "").strip()
-    })
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS oauth_config (key TEXT PRIMARY KEY, value TEXT)")
+    c.execute("INSERT OR REPLACE INTO oauth_config (key, value) VALUES ('google_client_id', ?)",
+              (data.get("google_client_id", "").strip(),))
+    c.execute("INSERT OR REPLACE INTO oauth_config (key, value) VALUES ('google_client_secret', ?)",
+              (data.get("google_client_secret", "").strip(),))
+    conn.commit()
+    conn.close()
     return web.json_response({"success": True, "message": "Đã lưu cấu hình Google OAuth thành công."})
 
 
@@ -188,7 +244,7 @@ async def api_admin_backup_data(request):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     data = {}
-    for tbl in ["users", "agents", "devices", "server_config", "oauth_config"]:
+    for tbl in ["users", "agents", "devices", "server_config", "oauth_config", "cf_account"]:
         try:
             c.execute(f"SELECT * FROM {tbl}")
             cols = [d[0] for d in c.description] if c.description else []
@@ -238,10 +294,6 @@ async def api_admin_restore_data(request):
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """, (d.get("device_id"), d.get("user_id"), d.get("agent_id"), d.get("name"), d.get("pairing_code"), d.get("status", "offline"), d.get("created_at")))
 
-        if "oauth_config" in data:
-            for o in data["oauth_config"]:
-                c.execute("INSERT OR REPLACE INTO oauth_config (key, value) VALUES (?, ?)", (o.get("key"), o.get("value")))
-
         conn.commit()
         conn.close()
         return web.json_response({"success": True, "message": "Đã phục hồi dữ liệu thành công."})
@@ -250,7 +302,7 @@ async def api_admin_restore_data(request):
         return web.json_response({"success": False, "message": f"Lỗi phục hồi dữ liệu: {str(e)}"})
 
 
-# ── GIAO DIỆN APP SERVER (HOST SERVER & DATA MANAGEMENT CONSOLE) ──
+# ── GIAO DIỆN APP SERVER (CỔNG MÁY CHỦ & QUẢN TRỊ) ─────────────────
 
 HTML_GATEWAY_APP = """<!DOCTYPE html>
 <html lang="vi">
@@ -334,7 +386,7 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
         <div class="header">
             <div>
                 <div class="brand-title">Ni-Oh Server — Cổng Máy Chủ & Quản Trị Hệ Thống</div>
-                <div class="brand-subtitle">Mở cổng dịch vụ máy chủ, xuất link Cloudflare và quản lý tài khoản người dùng</div>
+                <div class="brand-subtitle">Mở cổng server nội bộ, kích hoạt Cloudflare và quản lý tài khoản người dùng</div>
             </div>
             <div id="gatewayBadge" class="status-badge offline">CỔNG SERVER: ĐÃ TẮT</div>
         </div>
@@ -342,7 +394,7 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
         <div class="stats-bar">
             <div class="stat-box">
                 <div class="stat-val" id="statLocalPort">8001</div>
-                <div class="stat-lbl">Cổng Nội Bộ (Local WebSocket & API)</div>
+                <div class="stat-lbl">Cổng Server Nội Bộ (WebSocket & API)</div>
             </div>
             <div class="stat-box">
                 <div class="stat-val" id="statActiveCount">0</div>
@@ -350,15 +402,45 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
             </div>
             <div class="stat-box">
                 <div class="stat-val" id="statUserCount">0</div>
-                <div class="stat-lbl">Tài Khoản Người Dùng Đã Đăng Ký</div>
+                <div class="stat-lbl">Tài Khoản Người Dùng Trong Hệ Thống</div>
             </div>
         </div>
 
-        <!-- KHỐI 1: MỞ CỔNG SERVER & XUẤT LINK CLOUDFLARE -->
+        <!-- KHỐI 1: TRẠNG THÁI LIÊN KẾT CLOUDFLARE -->
         <div class="card">
             <div class="card-header">
-                <span>1. Mở Cổng Server & Kích Hoạt Cloudflare Anycast</span>
+                <span>1. Trạng Thái & Liên Kết Tài Khoản Cloudflare</span>
+                <span id="cfAccountBadge" style="font-size: 13px; font-weight: 600; color: #38bdf8;">Đang kiểm tra...</span>
             </div>
+
+            <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5; margin-bottom: 16px;">
+                Liên kết tài khoản Cloudflare để máy chủ có thể ủy quyền tên miền riêng hoặc sử dụng hạ tầng Anycast toàn cầu để tạo đường truyền bảo mật cho các mạch Xiaozhi.
+            </p>
+
+            <div style="display: flex; gap: 10px; flex-wrap: wrap; margin-bottom: 16px;">
+                <button class="btn btn-primary btn-sm" onclick="linkQuickTunnel()">Liên Kết 1-Chạm (Quick Tunnel)</button>
+                <button class="btn btn-secondary btn-sm" onclick="startWebLogin()">Đăng Nhập Web Cloudflare</button>
+                <button class="btn btn-danger btn-sm" onclick="unlinkCF()">Hủy Liên Kết</button>
+            </div>
+
+            <div style="background: #0b1120; border: 1px solid var(--panel-border); border-radius: 8px; padding: 14px;">
+                <label>Hoặc Liên Kết Bằng Cloudflare API Token:</label>
+                <div style="display: flex; gap: 8px; margin-top: 6px;">
+                    <input type="password" id="cfTokenInput" class="mono-input" placeholder="Dán Cloudflare API Token vào đây...">
+                    <button class="btn btn-secondary btn-sm" style="white-space: nowrap;" onclick="linkToken()">Xác Thực Token</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- KHỐI 2: MỞ CỔNG SERVER & XUẤT LINK CLOUDFLARE -->
+        <div class="card">
+            <div class="card-header">
+                <span>2. Mở Cổng Server & Xuất Link Kết Nối</span>
+            </div>
+
+            <p style="font-size: 13px; color: var(--text-muted); line-height: 1.5; margin-bottom: 16px;">
+                Mặc định cổng server được đóng an toàn. Nhấp nút bên dưới khi bạn muốn <strong>mở cổng server</strong> để các mạch Xiaozhi kết nối và người dùng vào thiết lập bot trên Web.
+            </p>
 
             <div style="display: flex; gap: 12px; align-items: flex-end; margin-bottom: 16px;">
                 <div style="flex: 1;">
@@ -370,9 +452,10 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
                 </button>
             </div>
 
+            <!-- Hộp Kết Quả Xuất Link -->
             <div id="endpointsBox" class="endpoints-box" style="display: none;">
                 <div class="endpoint-row">
-                    <div class="endpoint-title">🌐 Link Web Server (Gửi cho người dùng truy cập quản lý Bot & Agent):</div>
+                    <div class="endpoint-title">🌐 Link Web Server (Gửi cho người dùng vào thiết lập Bot & Agent của họ):</div>
                     <div class="endpoint-value-wrap">
                         <span class="endpoint-value" id="urlWebPortal">https://...</span>
                         <div style="display: flex; gap: 6px;">
@@ -391,7 +474,7 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
                 </div>
 
                 <div class="endpoint-row">
-                    <div class="endpoint-title">🔄 Link Cổng Cập Nhật OTA Cho Firmware ESP32:</div>
+                    <div class="endpoint-title">🔄 Link Cập Nhật OTA Firmware Cho Mạch ESP32:</div>
                     <div class="endpoint-value-wrap">
                         <span class="endpoint-value" id="urlOTA">https://.../xiaozhi/ota/</span>
                         <button class="btn btn-secondary btn-sm" onclick="copyValue('urlOTA')">Copy Link</button>
@@ -400,10 +483,10 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
             </div>
         </div>
 
-        <!-- KHỐI 2: QUẢN LÝ DỮ LIỆU NGƯỜI DÙNG & TÀI KHOẢN GOOGLE -->
+        <!-- KHỐI 3: QUẢN LÝ DỮ LIỆU NGƯỜI DÙNG & TÀI KHOẢN GOOGLE -->
         <div class="card">
             <div class="card-header">
-                <span>2. Quản Lý Data Người Dùng & Cấu Hình Google OAuth</span>
+                <span>3. Quản Lý Data Người Dùng & Sao Lưu Dữ Liệu</span>
                 <div style="display: flex; gap: 8px;">
                     <button class="btn btn-secondary btn-sm" onclick="backupData()">Sao Lưu Dữ Liệu (Backup JSON)</button>
                     <label class="btn btn-secondary btn-sm" style="cursor: pointer; margin: 0;">
@@ -413,43 +496,40 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
                 </div>
             </div>
 
-            <!-- Thiết lập Google OAuth Credentials -->
-            <div style="background: #0b1120; border: 1px solid var(--panel-border); border-radius: 8px; padding: 16px; margin-bottom: 20px;">
-                <div style="font-size: 13px; font-weight: 600; margin-bottom: 10px; color: var(--accent);">
-                    Cấu Hình Google OAuth (Dùng để cấp quyền đăng nhập Google cho Web Server)
-                </div>
-                <div style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-bottom: 12px;">
-                    <div>
-                        <label>Google Client ID:</label>
-                        <input type="text" id="googleClientId" class="mono-input" placeholder="xxxxx.apps.googleusercontent.com">
-                    </div>
-                    <div>
-                        <label>Google Client Secret:</label>
-                        <input type="password" id="googleClientSecret" class="mono-input" placeholder="GOCSPX-xxxxx">
-                    </div>
-                </div>
-                <div style="display: flex; justify-content: space-between; align-items: center;">
-                    <div style="font-size: 12px; color: var(--text-muted);">
-                        Redirect URI cần thêm vào Google Cloud Console: <code id="redirectUriHint" style="color: #38bdf8; font-family: var(--mono);">/api/auth/google/callback</code>
-                    </div>
-                    <button class="btn btn-primary btn-sm" onclick="saveOAuthConfig()">Lưu Cấu Hình Google</button>
-                </div>
-            </div>
-
-            <!-- Bảng Người Dùng -->
             <div class="card-header" style="font-size: 14px; border-bottom: none; padding-bottom: 0; margin-bottom: 10px;">
-                <span>Danh Sách Người Dùng Đã Đăng Nhập Hệ Thống</span>
+                <span>Danh Sách Tài Khoản Người Dùng Trong Hệ Thống</span>
                 <button class="btn btn-secondary btn-sm" onclick="loadUsersTable()">Làm Mới</button>
             </div>
             <div id="usersTableContainer">
                 <div class="empty-table">Chưa có người dùng nào đăng ký hoặc đăng nhập.</div>
             </div>
+
+            <!-- Cấu Hình Google OAuth 2.0 Tùy Chọn -->
+            <div style="background: #0b1120; border: 1px solid var(--panel-border); border-radius: 8px; padding: 14px; margin-top: 18px;">
+                <div style="font-size: 13px; font-weight: 600; margin-bottom: 6px; color: #f1f5f9;">
+                    Cấu Hình Google OAuth 2.0 (Tùy Chọn):
+                </div>
+                <div style="font-size: 12px; color: var(--text-muted); margin-bottom: 12px; line-height: 1.4;">
+                    Nếu bạn sở hữu tên miền riêng và muốn chuyển hướng đăng nhập trực tiếp qua trang ủy quyền của Google, hãy nhập Google Client ID & Secret bên dưới. Nếu để trống, Web Server vẫn cho phép người dùng liên kết tài khoản Google tức thì mà không gặp bất kỳ lỗi nào.
+                </div>
+                <div style="display: grid; grid-template-columns: 1fr 1fr auto; gap: 10px; align-items: flex-end;">
+                    <div>
+                        <label>Google Client ID:</label>
+                        <input type="text" id="googleClientIdInput" class="mono-input" placeholder="...apps.googleusercontent.com">
+                    </div>
+                    <div>
+                        <label>Google Client Secret:</label>
+                        <input type="password" id="googleClientSecretInput" class="mono-input" placeholder="GOCSPX-...">
+                    </div>
+                    <button class="btn btn-secondary btn-sm" style="height: 38px; white-space: nowrap;" onclick="saveOAuthConfig()">Lưu Cấu Hình</button>
+                </div>
+            </div>
         </div>
 
-        <!-- KHỐI 3: THEO DÕI KẾT NỐI MẠCH THỜI GIAN THỰC -->
+        <!-- KHỐI 4: THEO DÕI KẾT NỐI MẠCH THỜI GIAN THỰC -->
         <div class="card">
             <div class="card-header">
-                <span>3. Giám Sát Mạch ESP32 Đang Kết Nối Trực Tiếp (Live WebSocket)</span>
+                <span>4. Giám Sát Mạch ESP32 Đang Kết Nối Trực Tiếp (Live WebSocket)</span>
                 <button class="btn btn-secondary btn-sm" onclick="loadStatus()">Làm Mới</button>
             </div>
             <div id="clientsTableContainer">
@@ -478,31 +558,67 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
                     document.getElementById('urlWebPortal').innerText = data.portal_web_url;
                     document.getElementById('urlWebSocket').innerText = data.wss_url;
                     document.getElementById('urlOTA').innerText = data.ota_url;
-
-                    document.getElementById('redirectUriHint').innerText = `${data.portal_web_url}/api/auth/google/callback`;
                 } else {
                     badge.innerText = 'CỔNG SERVER: ĐÃ TẮT';
                     badge.className = 'status-badge offline';
                     btn.innerText = 'Mở Cổng Server & Xuất Link Cloudflare';
                     btn.className = 'btn btn-primary';
                     box.style.display = 'none';
+                }
 
-                    document.getElementById('redirectUriHint').innerText = `http://localhost:${data.local_port}/api/auth/google/callback`;
+                // Cập nhật trạng thái Cloudflare
+                const cfBadge = document.getElementById('cfAccountBadge');
+                if (data.cf_logged_in) {
+                    cfBadge.innerText = `Đã liên kết: ${data.cf_account}`;
+                    cfBadge.style.color = '#10b981';
+                } else {
+                    cfBadge.innerText = 'Chưa liên kết tài khoản';
+                    cfBadge.style.color = '#94a3b8';
                 }
 
                 document.getElementById('statLocalPort').innerText = data.local_port || 8001;
                 document.getElementById('statActiveCount').innerText = data.active_clients_count || 0;
                 document.getElementById('statUserCount').innerText = data.total_users_count || 0;
 
-                if (data.oauth) {
-                    document.getElementById('googleClientId').value = data.oauth.google_client_id || '';
-                    document.getElementById('googleClientSecret').value = data.oauth.google_client_secret || '';
-                }
-
                 renderClientsTable(data.live_clients || []);
             } catch (e) {
                 console.error("Lỗi lấy trạng thái:", e);
             }
+        }
+
+        async function linkQuickTunnel() {
+            const res = await fetch('/api/gateway/cf-link-quick', { method: 'POST' });
+            const data = await res.json();
+            alert(data.message);
+            loadStatus();
+        }
+
+        async function startWebLogin() {
+            const res = await fetch('/api/gateway/cf-start-login', { method: 'POST' });
+            const data = await res.json();
+            alert(data.message);
+            loadStatus();
+        }
+
+        async function linkToken() {
+            const token = document.getElementById('cfTokenInput').value.trim();
+            if (!token) { alert('Vui lòng nhập Cloudflare API Token.'); return; }
+            const res = await fetch('/api/gateway/cf-link-token', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ token: token })
+            });
+            const data = await res.json();
+            alert(data.message);
+            loadStatus();
+        }
+
+        async function unlinkCF() {
+            if (!confirm('Bạn có chắc muốn hủy liên kết tài khoản Cloudflare?')) return;
+            const res = await fetch('/api/gateway/cf-unlink', { method: 'POST' });
+            const data = await res.json();
+            alert(data.message);
+            loadStatus();
         }
 
         async function toggleGateway() {
@@ -511,7 +627,7 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
             const domain = document.getElementById('customDomain').value.trim();
 
             const btn = document.getElementById('toggleBtn');
-            btn.innerText = "Đang kích hoạt hạ tầng mạng Cloudflare...";
+            btn.innerText = "Đang kích hoạt hạ tầng Cloudflare...";
             btn.disabled = true;
 
             try {
@@ -530,19 +646,6 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
                 btn.disabled = false;
                 loadStatus();
             }
-        }
-
-        async function saveOAuthConfig() {
-            const cid = document.getElementById('googleClientId').value.trim();
-            const csec = document.getElementById('googleClientSecret').value.trim();
-
-            const res = await fetch('/api/admin/oauth-config', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ google_client_id: cid, google_client_secret: csec })
-            });
-            const data = await res.json();
-            alert(data.message);
         }
 
         async function loadUsersTable() {
@@ -685,8 +788,34 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
             window.open(url, '_blank');
         }
 
+        async function loadOAuthConfig() {
+            try {
+                const res = await fetch('/api/admin/oauth-config');
+                const data = await res.json();
+                if (data.google_client_id) document.getElementById('googleClientIdInput').value = data.google_client_id;
+                if (data.google_client_secret) document.getElementById('googleClientSecretInput').value = data.google_client_secret;
+            } catch (e) {}
+        }
+
+        async function saveOAuthConfig() {
+            const cid = document.getElementById('googleClientIdInput').value.trim();
+            const sec = document.getElementById('googleClientSecretInput').value.trim();
+            try {
+                const res = await fetch('/api/admin/oauth-config', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({ google_client_id: cid, google_client_secret: sec })
+                });
+                const data = await res.json();
+                alert(data.message);
+            } catch (e) {
+                alert("Lỗi lưu cấu hình: " + e);
+            }
+        }
+
         loadStatus();
         loadUsersTable();
+        loadOAuthConfig();
         setInterval(loadStatus, 4000);
     </script>
 </body>

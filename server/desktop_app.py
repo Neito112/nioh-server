@@ -44,8 +44,13 @@ from server.gateway_app import (
     GATEWAY_STATE,
     api_get_gateway_status,
     api_toggle_gateway,
+    api_link_quick,
+    api_link_token,
+    api_start_web_login,
+    api_unlink_cloudflare,
     api_admin_get_users,
     api_admin_delete_user,
+    api_admin_get_oauth,
     api_admin_save_oauth,
     api_admin_backup_data,
     api_admin_restore_data
@@ -54,6 +59,7 @@ from server.web_portal import (
     HTML_XIAOZHI_PORTAL,
     api_google_login,
     api_google_callback,
+    api_portal_google_link,
     api_portal_login,
     api_portal_register,
     api_portal_get_agents,
@@ -135,8 +141,13 @@ def create_application(port: int = 8001):
     app.router.add_get("/gateway", lambda req: web.Response(text=HTML_GATEWAY_APP, content_type="text/html", charset="utf-8"))
     app.router.add_get("/api/gateway/status", api_get_gateway_status)
     app.router.add_post("/api/gateway/toggle", api_toggle_gateway)
+    app.router.add_post("/api/gateway/cf-link-quick", api_link_quick)
+    app.router.add_post("/api/gateway/cf-link-token", api_link_token)
+    app.router.add_post("/api/gateway/cf-start-login", api_start_web_login)
+    app.router.add_post("/api/gateway/cf-unlink", api_unlink_cloudflare)
     app.router.add_get("/api/admin/users", api_admin_get_users)
     app.router.add_post("/api/admin/delete-user", api_admin_delete_user)
+    app.router.add_get("/api/admin/oauth-config", api_admin_get_oauth)
     app.router.add_post("/api/admin/oauth-config", api_admin_save_oauth)
     app.router.add_get("/api/admin/backup", api_admin_backup_data)
     app.router.add_post("/api/admin/restore", api_admin_restore_data)
@@ -145,6 +156,7 @@ def create_application(port: int = 8001):
     app.router.add_get("/portal", lambda req: web.Response(text=HTML_XIAOZHI_PORTAL, content_type="text/html", charset="utf-8"))
     app.router.add_get("/api/auth/google/login", api_google_login)
     app.router.add_get("/api/auth/google/callback", api_google_callback)
+    app.router.add_post("/api/portal/google-link", api_portal_google_link)
     app.router.add_post("/api/portal/register", api_portal_register)
     app.router.add_post("/api/portal/login", api_portal_login)
     app.router.add_get("/api/portal/agents", api_portal_get_agents)

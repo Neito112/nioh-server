@@ -140,6 +140,41 @@ class TestNiOhDualServer(AioHTTPTestCase):
         self.assertIn("websocket", data)
         self.assertTrue(data["websocket"]["url"].endswith("/xiaozhi/v1/"))
 
+    async def test_05_google_link_modal_and_cf_linking(self):
+        # 1. Test in-portal Google account linking without blocking errors
+        g_email = f"google_user_{uuid.uuid4().hex[:6]}@gmail.com"
+        link_resp = await self.client.post("/api/portal/google-link", json={
+            "email": g_email,
+            "name": "Nguyen Van Google"
+        })
+        self.assertEqual(link_resp.status, 200)
+        link_data = await link_resp.json()
+        self.assertTrue(link_data["success"])
+        self.assertEqual(link_data["user"]["provider"], "google")
+        self.assertEqual(link_data["user"]["email"], g_email)
+
+        # 2. Check that Desktop App admin user table displays this Google user
+        admin_resp = await self.client.get("/api/admin/users")
+        users = (await admin_resp.json()).get("users", [])
+        g_matched = [u for u in users if u["email"] == g_email]
+        self.assertEqual(len(g_matched), 1)
+        self.assertEqual(g_matched[0]["provider"], "google")
+
+        # 3. Test Cloudflare quick link and unlink
+        cf_quick = await self.client.post("/api/gateway/cf-link-quick")
+        self.assertEqual(cf_quick.status, 200)
+        self.assertTrue((await cf_quick.json())["success"])
+
+        # Check status shows logged in
+        status_resp = await self.client.get("/api/gateway/status")
+        status_data = await status_resp.json()
+        self.assertTrue(status_data["cf_logged_in"])
+
+        # Unlink Cloudflare
+        cf_unlink = await self.client.post("/api/gateway/cf-unlink")
+        self.assertEqual(cf_unlink.status, 200)
+        self.assertTrue((await cf_unlink.json())["success"])
+
 
 if __name__ == "__main__":
     unittest.main()
