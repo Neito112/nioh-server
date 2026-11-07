@@ -15,7 +15,7 @@ import logging
 from dotenv import load_dotenv
 from sync.node_registry import NodeRegistry
 
-logger = logging.getLogger("nioh.config_sync")
+logger = logging.getLogger("xiaozhivn.config_sync")
 
 
 async def load_nioh_config() -> dict:

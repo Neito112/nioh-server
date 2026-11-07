@@ -1,7 +1,7 @@
 # ============================================================
-# Ni-Oh Distributed Server — 1-Click Installer (Windows)
+# XiaoZhiVN Distributed Server — 1-Click Installer (Windows)
 # ============================================================
-# Tự động cài đặt & tạo Shortcut icon "Ni-Oh Server" trên Desktop
+# Tự động cài đặt & tạo Shortcut icon "XiaoZhiVN Server" trên Desktop
 # Toàn bộ cấu hình được thực hiện 100% trên giao diện trực quan!
 # ============================================================
 
@@ -16,7 +16,7 @@ function Write-Err   { param($msg) Write-Host "[ERR]  $msg" -ForegroundColor Red
 
 Write-Host @"
 ╔══════════════════════════════════════════╗
-║          Ni-Oh Distributed Server        ║
+║         XiaoZhiVN Distributed Server     ║
 ║          1-Click Installer v2.0          ║
 ╚══════════════════════════════════════════╝
 "@ -ForegroundColor Cyan
@@ -60,7 +60,7 @@ if (Test-Path "$INSTALL_DIR\.git") {
     git pull origin master
     Pop-Location
 } else {
-    Write-Info "Tải mã nguồn Ni-Oh Server về $INSTALL_DIR..."
+    Write-Info "Tải mã nguồn XiaoZhiVN Server về $INSTALL_DIR..."
     git clone $REPO_URL $INSTALL_DIR
 }
 
@@ -95,10 +95,10 @@ NIOH_HTTP_PORT=8003
 }
 
 # ── 6. Tạo Desktop Shortcut với Icon chuyên nghiệp ──────────
-Write-Info "Tạo Shortcut 'Ni-Oh Server' trên màn hình Desktop..."
+Write-Info "Tạo Shortcut 'XiaoZhiVN Server' trên màn hình Desktop..."
 try {
     $desktopPath = [Environment]::GetFolderPath("Desktop")
-    $shortcutPath = "$desktopPath\Ni-Oh Server.lnk"
+    $shortcutPath = "$desktopPath\XiaoZhiVN Server.lnk"
     $wscriptPath = "$env:SystemRoot\System32\wscript.exe"
     $vbsPath = "$INSTALL_DIR\run_silent.vbs"
     $iconPath = "$INSTALL_DIR\assets\icon.ico"
@@ -113,9 +113,9 @@ try {
     } else {
         $Shortcut.IconLocation = "$env:SystemRoot\System32\shell32.dll,14"
     }
-    $Shortcut.Description = "Ni-Oh Server Engine & Control Center"
+    $Shortcut.Description = "XiaoZhiVN Server Engine & Control Center"
     $Shortcut.Save()
-    Write-Ok "Đã tạo Icon 'Ni-Oh Server' ngay trên Desktop của bạn!"
+    Write-Ok "Đã tạo Icon 'XiaoZhiVN Server' ngay trên Desktop của bạn!"
 } catch {
     Write-Warn "Không thể tạo Shortcut Desktop: $_"
 }
@@ -123,14 +123,14 @@ try {
 # ── 7. Hoàn tất & Khởi chạy ngay ─────────────────────────────
 Write-Host ""
 Write-Host "═════════════════════════════════════════════════════" -ForegroundColor Green
-Write-Host "   ✓ CÀI ĐẶT THÀNH CÔNG NI-OH SERVER ENGINE!" -ForegroundColor Green
+Write-Host "   ✓ CÀI ĐẶT THÀNH CÔNG XIAOZHIVN SERVER ENGINE!" -ForegroundColor Green
 Write-Host "═════════════════════════════════════════════════════" -ForegroundColor Green
 Write-Host ""
 Write-Host "  * Bạn KHÔNG CẦN sửa file code hay cấu hình thủ công." -ForegroundColor Cyan
-Write-Host "  * Chỉ cần nhấp đúp vào Icon 'Ni-Oh Server' trên Desktop." -ForegroundColor Cyan
+Write-Host "  * Chỉ cần nhấp đúp vào Icon 'XiaoZhiVN Server' trên Desktop." -ForegroundColor Cyan
 Write-Host "  * Toàn bộ cài đặt (API Key, Model, Mạng...) nằm ngay trên giao diện!" -ForegroundColor Cyan
 Write-Host ""
 
 # Tự động kích hoạt Dashboard ngay sau khi cài
-Write-Info "Đang mở giao diện Ni-Oh Server Control Center..."
+Write-Info "Đang mở giao diện XiaoZhiVN Server Control Center..."
 Start-Process "wscript.exe" -ArgumentList "`"$INSTALL_DIR\run_silent.vbs`""

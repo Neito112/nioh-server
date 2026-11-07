@@ -22,7 +22,7 @@ import urllib.request
 import urllib.error
 import sqlite3
 
-logger = logging.getLogger("nioh.cf_tunnel")
+logger = logging.getLogger("xiaozhivn.cf_tunnel")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 CF_DIR = os.path.join(BASE_DIR, ".cloudflared")
@@ -35,7 +35,7 @@ USER_HOME = os.path.expanduser("~")
 SYSTEM_CERT_PATH = os.path.join(USER_HOME, ".cloudflared", "cert.pem")
 LOCAL_CERT_PATH = os.path.join(CF_DIR, "cert.pem")
 
-TUNNEL_NAME = "nioh-server"
+TUNNEL_NAME = "xiaozhivn-server"
 _tunnel_proc = None
 _login_proc = None
 
@@ -98,7 +98,7 @@ def verify_cf_token(token: str) -> dict:
         url,
         headers={
             "Authorization": f"Bearer {token}",
-            "User-Agent": "NiOhServer/1.0",
+            "User-Agent": "XiaoZhiVNServer/1.0",
             "Content-Type": "application/json"
         }
     )
@@ -148,7 +148,7 @@ def verify_cf_global_key(email: str, api_key: str) -> dict:
         headers={
             "X-Auth-Email": email,
             "X-Auth-Key": api_key,
-            "User-Agent": "NiOhServer/1.0",
+            "User-Agent": "XiaoZhiVNServer/1.0",
             "Content-Type": "application/json"
         }
     )

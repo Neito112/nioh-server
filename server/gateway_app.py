@@ -1,6 +1,6 @@
 """
-Ni-Oh Server Gateway (Desktop App)
-----------------------------------
+XiaoZhiVN Server Gateway (Desktop App)
+-------------------------------------
 Thành phần 1: APP SERVER (Cổng Máy Chủ & Quản Trị Hệ Thống)
 Chức năng chính:
 1. Trạng Thái & Liên Kết Tài Khoản Cloudflare:
@@ -32,7 +32,7 @@ import asyncio
 import logging
 from aiohttp import web
 
-logger = logging.getLogger("nioh.gateway_app")
+logger = logging.getLogger("xiaozhivn.gateway_app")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "data", "portal.db")
@@ -309,7 +309,7 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ni-Oh Server — Cổng Máy Chủ & Quản Trị Hệ Thống</title>
+    <title>XiaoZhiVN Server — Cổng Máy Chủ & Quản Trị Hệ Thống</title>
     <style>
         :root {
             --bg: #090d16;
@@ -385,7 +385,7 @@ HTML_GATEWAY_APP = """<!DOCTYPE html>
     <div class="wrapper">
         <div class="header">
             <div>
-                <div class="brand-title">Ni-Oh Server — Cổng Máy Chủ & Quản Trị Hệ Thống</div>
+                <div class="brand-title">XiaoZhiVN Server — Cổng Máy Chủ & Quản Trị Hệ Thống</div>
                 <div class="brand-subtitle">Mở cổng server nội bộ, kích hoạt Cloudflare và quản lý tài khoản người dùng</div>
             </div>
             <div id="gatewayBadge" class="status-badge offline">CỔNG SERVER: ĐÃ TẮT</div>

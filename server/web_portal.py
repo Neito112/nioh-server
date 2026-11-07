@@ -1,6 +1,6 @@
 """
-Ni-Oh Voice Portal (Web Server Console)
----------------------------------------
+XiaoZhiVN Voice Portal (Web Server Console)
+-------------------------------------------
 Thành phần 2: Giao diện Web quản trị dành cho người dùng:
 - Truy cập từ xa thông qua đường link Cloudflare được xuất ra từ App Server
 - Đăng nhập liên kết tài khoản Google OAuth 2.0 Web Flow & Đăng ký Email/Mật khẩu
@@ -19,7 +19,7 @@ import logging
 import aiohttp
 from aiohttp import web
 
-logger = logging.getLogger("nioh.web_portal")
+logger = logging.getLogger("xiaozhivn.web_portal")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "data", "portal.db")
@@ -283,7 +283,7 @@ async def api_google_callback(request: web.Request):
     <div style="text-align:center;">
         <h3>Đang chuyển hướng về bảng điều khiển...</h3>
         <script>
-            sessionStorage.setItem('nioh_user', JSON.stringify({user_json}));
+            sessionStorage.setItem('xiaozhivn_user', JSON.stringify({user_json}));
             window.location.href = '/portal';
         </script>
     </div>
@@ -522,7 +522,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ni-Oh Voice Portal — Bảng Quản Trị Thiết Bị & Trợ Lý AI</title>
+    <title>XiaoZhiVN Voice Portal — Bảng Quản Trị Thiết Bị & Trợ Lý AI</title>
     <style>
         :root {
             --bg: #090d16;
@@ -618,7 +618,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
 <body>
     <div class="navbar">
         <div>
-            <div class="brand-title">Ni-Oh Voice Portal</div>
+            <div class="brand-title">XiaoZhiVN Voice Portal</div>
             <div class="brand-subtitle">Bảng Quản Trị Thiết Bị & Trợ Lý AI</div>
         </div>
         <div id="userProfile" style="display: none; align-items: center; gap: 12px;">
@@ -913,7 +913,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
 
         function onLoginSuccess(user) {
             currentUser = user;
-            sessionStorage.setItem('nioh_user', JSON.stringify(user));
+            sessionStorage.setItem('xiaozhivn_user', JSON.stringify(user));
             document.getElementById('authSection').style.display = 'none';
             document.getElementById('portalSection').style.display = 'block';
             document.getElementById('userProfile').style.display = 'flex';
@@ -933,6 +933,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
 
         function logoutUser() {
             currentUser = null;
+            sessionStorage.removeItem('xiaozhivn_user');
             sessionStorage.removeItem('nioh_user');
             document.getElementById('portalSection').style.display = 'none';
             document.getElementById('userProfile').style.display = 'none';
@@ -1176,7 +1177,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             document.getElementById('fwJsonConfig').value = JSON.stringify(configObj, null, 2);
         }
 
-        const saved = sessionStorage.getItem('nioh_user');
+        const saved = sessionStorage.getItem('xiaozhivn_user') || sessionStorage.getItem('nioh_user');
         if (saved) {
             try { onLoginSuccess(JSON.parse(saved)); } catch(e){}
         }

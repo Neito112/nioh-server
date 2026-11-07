@@ -9,7 +9,7 @@ sau đó đóng gói thành Frame JSON gửi ngược lại ESP32 để ESP32 ph
 import json
 import logging
 
-logger = logging.getLogger("nioh.tools.esp_now")
+logger = logging.getLogger("xiaozhivn.tools.esp_now")
 
 
 def build_esp_now_packet(action: str, target_device: str, value: str = "") -> dict:

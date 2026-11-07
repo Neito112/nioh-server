@@ -10,7 +10,7 @@ Sử dụng yt-dlp để tìm kiếm và trích xuất luồng âm thanh YouTube
 import asyncio
 import logging
 
-logger = logging.getLogger("nioh.tools.free_music")
+logger = logging.getLogger("xiaozhivn.tools.free_music")
 
 
 async def search_and_get_audio_stream(song_name: str) -> dict:

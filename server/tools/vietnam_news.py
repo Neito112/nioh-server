@@ -11,7 +11,7 @@ import logging
 import re
 import html
 
-logger = logging.getLogger("nioh.tools.vietnam_news")
+logger = logging.getLogger("xiaozhivn.tools.vietnam_news")
 
 NEWS_SOURCES = {
     "tin-nong": "https://vnexpress.net/rss/tin-moi-nhat.rss",

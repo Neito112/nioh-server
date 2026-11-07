@@ -8,7 +8,7 @@ Hỗ trợ tìm kiếm tiếng Việt và trả kết quả tóm tắt cho LLM.
 import asyncio
 import logging
 
-logger = logging.getLogger("nioh.tools.free_search")
+logger = logging.getLogger("xiaozhivn.tools.free_search")
 
 
 async def search_web(query: str, max_results: int = 4) -> dict:

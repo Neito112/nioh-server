@@ -1,6 +1,6 @@
 """
-Ni-Oh Server - Dual-Component Architecture
-------------------------------------------
+XiaoZhiVN Server - Dual-Component Architecture
+----------------------------------------------
 Thành phần 1: APP SERVER (Cổng Máy Chủ & Quản Trị Hệ Thống):
    - Mở cổng server nội bộ (Port 8001), kích hoạt Cloudflare Anycast Tunnel
    - Xuất 2 link chính: Link Web Server cho người dùng và Link cho mạch Xiaozhi
@@ -73,7 +73,7 @@ from server.web_portal import (
 )
 from server.voice_engine import handle_xiaozhi_websocket
 
-logger = logging.getLogger("nioh.main_app")
+logger = logging.getLogger("xiaozhivn.main_app")
 
 
 def is_port_in_use(port: int) -> bool:
@@ -126,8 +126,8 @@ async def handle_ota_request(request):
             "timezone_offset": 420  # +7 GMT cho Việt Nam (7 * 60 phút)
         },
         "firmware": {
-            "version": os.environ.get("NIOH_FIRMWARE_VERSION", "2.5.3"),
-            "url": os.environ.get("NIOH_FIRMWARE_URL", "")
+            "version": os.environ.get("XIAOZHIVN_FIRMWARE_VERSION", os.environ.get("NIOH_FIRMWARE_VERSION", "2.5.3")),
+            "url": os.environ.get("XIAOZHIVN_FIRMWARE_URL", os.environ.get("NIOH_FIRMWARE_URL", ""))
         },
         "websocket": {
             "url": ws_url,
@@ -147,7 +147,7 @@ async def handle_vision_explain(request: web.Request):
     if request.method == "GET":
         return web.json_response({
             "code": 0,
-            "message": "Ni-Oh Vision Analysis Endpoint is running",
+            "message": "XiaoZhiVN Vision Analysis Endpoint is running",
             "protocol": "mcp/vision",
             "supported_models": ["gemini-2.5-flash", "deepseek-chat", "gpt-4o-mini"]
         })
@@ -246,7 +246,7 @@ async def run_server(port: int = 8001):
         await runner.setup()
         site = web.TCPSite(runner, "0.0.0.0", port)
         await site.start()
-        logger.info(f"Ni-Oh Server đã khởi chạy thành công tại http://localhost:{port}")
+        logger.info(f"XiaoZhiVN Server đã khởi chạy thành công tại http://localhost:{port}")
 
         open_browser(f"http://localhost:{port}")
 

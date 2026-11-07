@@ -9,7 +9,7 @@ import socket
 import logging
 import asyncio
 
-logger = logging.getLogger("nioh.tools.iot_discovery")
+logger = logging.getLogger("xiaozhivn.tools.iot_discovery")
 
 
 async def scan_local_iot_devices(timeout: int = 3) -> dict:

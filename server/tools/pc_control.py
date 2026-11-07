@@ -11,7 +11,7 @@ import socket
 import logging
 import subprocess
 
-logger = logging.getLogger("nioh.tools.pc_control")
+logger = logging.getLogger("xiaozhivn.tools.pc_control")
 
 
 def execute_pc_command(action: str, target: str = "local", param: str = "") -> dict:

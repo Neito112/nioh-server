@@ -1,6 +1,6 @@
 """
-Ni-Oh MCP (Model Context Protocol) & Unified Tool Manager
----------------------------------------------------------
+XiaoZhiVN MCP (Model Context Protocol) & Unified Tool Manager
+-------------------------------------------------------------
 Triển khai chuẩn giao thức Model Context Protocol (MCP) và Function Calling:
 1. Client-side MCP: Tương tác hai chiều qua JSON-RPC 2.0 với phần cứng ESP32:
    - Bắt tay khởi tạo: method 'initialize'
@@ -21,7 +21,7 @@ import asyncio
 import logging
 from typing import Dict, Any, List
 
-logger = logging.getLogger("nioh.mcp_manager")
+logger = logging.getLogger("xiaozhivn.mcp_manager")
 
 from server.tools.free_weather import get_weather
 from server.tools.free_search import search_web
@@ -186,7 +186,7 @@ class DeviceMCPClient:
                     "sampling": {}
                 },
                 "clientInfo": {
-                    "name": "Ni-Oh-Server",
+                    "name": "XiaoZhiVN-Server",
                     "version": "1.0.0"
                 }
             }
@@ -277,3 +277,4 @@ class DeviceMCPClient:
             })
 
         return unified
+

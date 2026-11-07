@@ -25,14 +25,14 @@ class TestNiOhDualServer(AioHTTPTestCase):
         resp_local = await self.client.get("/")
         self.assertEqual(resp_local.status, 200)
         text_local = await resp_local.text()
-        self.assertIn("Ni-Oh Server", text_local)
+        self.assertIn("XiaoZhiVN Server", text_local)
         self.assertIn("Cổng Máy Chủ & Quản Trị Hệ Thống", text_local)
 
         # 2. Remote Cloudflare host gets Web Portal
         resp_cf = await self.client.get("/", headers={"Host": "gateway.trycloudflare.com"})
         self.assertEqual(resp_cf.status, 200)
         text_cf = await resp_cf.text()
-        self.assertIn("Ni-Oh Voice Portal", text_cf)
+        self.assertIn("XiaoZhiVN Voice Portal", text_cf)
         self.assertIn("Bảng Quản Trị Thiết Bị & Trợ Lý AI", text_cf)
 
     async def test_02_server_gateway_and_oauth_config(self):
@@ -187,7 +187,7 @@ class TestNiOhDualServer(AioHTTPTestCase):
         self.assertIn("Âm lịch", dt["summary"])
 
         # 2. Test Vietnamese Wake-word & Exit responses
-        wake_res = await process_vietnamese_query("chào ni-oh", {})
+        wake_res = await process_vietnamese_query("chào xiaozhivn", {})
         self.assertTrue(len(wake_res) > 0)
 
         exit_res = await process_vietnamese_query("tạm biệt bạn nhé", {})
@@ -240,7 +240,7 @@ class TestNiOhDualServer(AioHTTPTestCase):
         await ws.send_json({
             "type": "listen",
             "state": "detect",
-            "text": "chào ni-oh"
+            "text": "chào xiaozhivn"
         })
 
         reply_stt = None

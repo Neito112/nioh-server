@@ -1,4 +1,4 @@
-# Ni-Oh Server & Device Portal
+# XiaoZhiVN Server & Device Portal
 
 > **Hệ thống Cổng Server AI phân tán & Web Quản lý thiết bị.**  
 > Chuẩn hóa theo mô hình 2 tầng độc lập:
@@ -51,16 +51,16 @@ Mở **PowerShell** và chạy:
 ```powershell
 irm https://raw.githubusercontent.com/Neito112/nioh-server/main/scripts/install.ps1 | iex
 ```
-*Script tự động cài đặt và tạo icon **"Ni-Oh Server"** trên màn hình Desktop.*
+*Script tự động cài đặt và tạo icon **"XiaoZhiVN Server"** trên màn hình Desktop.*
 
-Hoặc tải repo về và nhấp đúp file: **`Khởi Động Ni-Oh.bat`**.
+Hoặc tải repo về và nhấp đúp file: **`Khởi Động XiaoZhiVN.bat`**.
 
 ---
 
 ## 🖥️ Hướng Dẫn Vận Hành
 
 ### Bước 1: Vận hành Cổng Server (Desktop App)
-1. Mở icon **Ni-Oh Server** trên Desktop.
+1. Mở icon **XiaoZhiVN Server** trên Desktop.
 2. Nhập thông tin tài khoản Cloudflare (Token / Account).
 3. Nhấp nút **"BẬT CỔNG SERVER & XUẤT LINK WEB"**:
    * Hệ thống tự động kích hoạt Cloudflare Tunnel.

@@ -20,10 +20,10 @@ import asyncio
 import aiohttp
 import logging
 
-logger = logging.getLogger("nioh.node_registry")
+logger = logging.getLogger("xiaozhivn.node_registry")
 
 GIST_API = "https://api.github.com/gists"
-GIST_FILENAME = "nioh_nodes.json"
+GIST_FILENAME = "xiaozhivn_nodes.json"
 HEARTBEAT_INTERVAL = 60  # seconds
 
 

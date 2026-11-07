@@ -8,7 +8,7 @@ Tự động chuyển đổi tên tỉnh/thành phố Việt Nam sang tọa đ�
 import logging
 import aiohttp
 
-logger = logging.getLogger("nioh.tools.free_weather")
+logger = logging.getLogger("xiaozhivn.tools.free_weather")
 
 # Tọa độ mặc định một số thành phố lớn tại Việt Nam
 DEFAULT_CITIES = {

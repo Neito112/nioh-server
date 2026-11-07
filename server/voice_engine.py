@@ -1,6 +1,6 @@
 """
-Ni-Oh Voice Engine (Vietnamese Xiaozhi-Compatible Core)
--------------------------------------------------------
+XiaoZhiVN Voice Engine (Vietnamese Xiaozhi-Compatible Core)
+-----------------------------------------------------------
 Chuẩn hóa theo kiến trúc của máy chủ mẫu "xinnan-tech/xiaozhi-esp32-server":
 1. Bắt tay WebSocket Hello Handshake chuẩn giao thức Xiaozhi (Version 1 & 2)
 2. Luồng ghép đôi mã PIN 6 chữ số: tự động xuất mã lên màn hình LCD mạch ESP32
@@ -30,7 +30,7 @@ import logging
 import aiohttp
 from aiohttp import web
 
-logger = logging.getLogger("nioh.voice_engine")
+logger = logging.getLogger("xiaozhivn.voice_engine")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "data", "portal.db")
@@ -57,8 +57,9 @@ except Exception as e:
 # ── BỘ TỪ KHÓA & CÂU THOẠI ĐÁNH THỨC / THOÁT THUẦN VIỆT ───────────
 
 VIETNAMESE_WAKE_WORDS = [
-    "chào ni-oh", "chào nioh", "chào xiaozhi", "xiaozhi ơi", "ni-oh ơi", "nioh ơi",
-    "bạn ơi", "alo bot", "alô bot", "trợ lý ơi", "ê bot", "chào bạn", "bật bot", "alô"
+    "chào xiaozhivn", "xiaozhivn ơi", "chào xiaozhi", "xiaozhi ơi", "xiaozhivn", "xiaozhi",
+    "bạn ơi", "alo bot", "alô bot", "trợ lý ơi", "ê bot", "chào bạn", "bật bot", "alô",
+    "chào ni-oh", "ni-oh ơi", "chào nioh", "nioh ơi"
 ]
 
 VIETNAMESE_WAKE_RESPONSES = [
@@ -121,9 +122,9 @@ def get_server_runtime_config() -> dict:
 
     return {
         "provider": rows.get("provider", "deepseek"),
-        "base_url": rows.get("base_url", os.environ.get("NIOH_LLM_BASE_URL", "https://api.deepseek.com")),
-        "api_key": rows.get("api_key", os.environ.get("NIOH_API_KEY", "")),
-        "model": rows.get("model", os.environ.get("NIOH_MODEL", "deepseek-chat")),
+        "base_url": rows.get("base_url", os.environ.get("XIAOZHIVN_LLM_BASE_URL", os.environ.get("NIOH_LLM_BASE_URL", "https://api.deepseek.com"))),
+        "api_key": rows.get("api_key", os.environ.get("XIAOZHIVN_API_KEY", os.environ.get("NIOH_API_KEY", ""))),
+        "model": rows.get("model", os.environ.get("XIAOZHIVN_MODEL", os.environ.get("NIOH_MODEL", "deepseek-chat"))),
         "voice": rows.get("voice", "vi-VN-HoaiMyNeural"),
         "speech_rate": rows.get("speech_rate", "+0%"),
         "enable_weather": rows.get("enable_weather", "1") == "1",
@@ -322,10 +323,10 @@ async def process_vietnamese_query(user_text: str, dev_info: dict, mcp_client: D
             return dt_res.get("summary")
 
     # 4. Gọi LLM AI với bộ công cụ Function Calling & MCP hợp nhất
-    api_key = dev_info.get("api_key") or server_cfg.get("api_key") or os.environ.get("NIOH_API_KEY", "")
+    api_key = dev_info.get("api_key") or server_cfg.get("api_key") or os.environ.get("XIAOZHIVN_API_KEY", os.environ.get("NIOH_API_KEY", ""))
     model = dev_info.get("model") or server_cfg.get("model", "deepseek-chat")
     base_url = server_cfg.get("base_url", "https://api.deepseek.com").rstrip("/")
-    system_prompt = dev_info.get("prompt") or "Bạn là Ni-Oh, trợ lý ảo thông minh cho thiết bị ESP32 tại Việt Nam."
+    system_prompt = dev_info.get("prompt") or "Bạn là XiaoZhiVN, trợ lý ảo thông minh cho thiết bị ESP32 tại Việt Nam."
 
     if not api_key:
         return f"Tôi đã nghe rõ: '{query}'. Để tôi có thể trả lời thông minh và điều khiển thiết bị, vui lòng đăng nhập Web Console và cài đặt API Key cho Trợ lý của bạn."
