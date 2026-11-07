@@ -1,6 +1,6 @@
 """
-Free Music Stream Tool for Ni-Oh Server
----------------------------------------
+Free Music Stream Tool for XiaoZhiVN Server
+-------------------------------------------
 Sử dụng yt-dlp để tìm kiếm và trích xuất luồng âm thanh YouTube:
 - 100% Miễn phí, không cần tài khoản hay API key
 - Hỗ trợ mọi bài hát tiếng Việt, remix, podcast

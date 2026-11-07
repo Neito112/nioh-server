@@ -1,6 +1,6 @@
 """
-Free Web Search Tool for Ni-Oh Server
--------------------------------------
+Free Web Search Tool for XiaoZhiVN Server
+-----------------------------------------
 Sử dụng DuckDuckGo Search: 100% Miễn phí, không cần đăng ký tài khoản hay API Key.
 Hỗ trợ tìm kiếm tiếng Việt và trả kết quả tóm tắt cho LLM.
 """

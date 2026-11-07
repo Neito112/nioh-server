@@ -59,7 +59,7 @@ except Exception as e:
 VIETNAMESE_WAKE_WORDS = [
     "chào xiaozhivn", "xiaozhivn ơi", "chào xiaozhi", "xiaozhi ơi", "xiaozhivn", "xiaozhi",
     "bạn ơi", "alo bot", "alô bot", "trợ lý ơi", "ê bot", "chào bạn", "bật bot", "alô",
-    "chào ni-oh", "ni-oh ơi", "chào nioh", "nioh ơi"
+    "chào em", "em ơi", "ơi em"
 ]
 
 VIETNAMESE_WAKE_RESPONSES = [

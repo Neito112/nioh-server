@@ -1,6 +1,6 @@
 """
-ESP-NOW Command Handler for Ni-Oh Server
------------------------------------------
+ESP-NOW Command Handler for XiaoZhiVN Server
+---------------------------------------------
 Vì server máy tính không có chip phát sóng ESP-NOW trực tiếp,
 server đóng vai trò phân tích câu lệnh của người dùng từ LLM,
 sau đó đóng gói thành Frame JSON gửi ngược lại ESP32 để ESP32 phát sóng vô tuyến.

@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # ============================================================
-# Ni-Oh Distributed Server — 1-Click Installer (Linux/macOS)
+# XiaoZhiVN Distributed Server — 1-Click Installer (Linux/macOS)
 # ============================================================
 set -euo pipefail
 
@@ -18,7 +18,7 @@ error()   { echo -e "${RED}[ERR]${NC}  $*"; exit 1; }
 echo -e "${CYAN}"
 cat << 'EOF'
 ╔══════════════════════════════════════════╗
-║          Ni-Oh Distributed Server        ║
+║        XiaoZhiVN Distributed Server      ║
 ║          1-Click Installer v1.0          ║
 ╚══════════════════════════════════════════╝
 EOF
@@ -86,7 +86,7 @@ ENV_FILE="$INSTALL_DIR/.env"
 
 collect_config() {
     echo ""
-    echo -e "${YELLOW}════════ Cấu hình Ni-Oh Server ════════${NC}"
+    echo -e "${YELLOW}════════ Cấu hình XiaoZhiVN Server ════════${NC}"
     
     # API Key (OpenRouter hoặc bất kỳ OpenAI-compatible)
     if [ -z "${NIOH_API_KEY:-}" ]; then
@@ -126,7 +126,7 @@ collect_config() {
 
     # Ghi vào .env
     cat > "$ENV_FILE" << ENVEOF
-# Ni-Oh Server Config — tự động tạo bởi install.sh
+# XiaoZhiVN Server Config — tự động tạo bởi install.sh
 # Chỉnh sửa file này để thay đổi cấu hình
 
 # ── LLM Config ──
@@ -178,7 +178,7 @@ install_systemd_service() {
     
     sudo tee "$SERVICE_FILE" > /dev/null << SVCEOF
 [Unit]
-Description=Ni-Oh Distributed Server
+Description=XiaoZhiVN Distributed Server
 After=network-online.target
 Wants=network-online.target
 
@@ -267,7 +267,7 @@ chmod +x "$INSTALL_DIR/start.sh"
 # ── 8. Done ─────────────────────────────────────────────────
 echo ""
 echo -e "${GREEN}════════════════════════════════════════${NC}"
-echo -e "${GREEN}✓ Ni-Oh Server cài xong!${NC}"
+echo -e "${GREEN}✓ XiaoZhiVN Server cài xong!${NC}"
 echo -e "${GREEN}════════════════════════════════════════${NC}"
 echo ""
 echo -e "  Thư mục:    ${CYAN}$INSTALL_DIR${NC}"
@@ -275,6 +275,6 @@ echo -e "  Config:     ${CYAN}$ENV_FILE${NC}"
 echo -e "  Chạy tay:   ${CYAN}$INSTALL_DIR/start.sh${NC}"
 echo ""
 echo -e "  Firmware OTA URL của bạn sẽ hiển thị sau khi server khởi động."
-echo -e "  Nhập URL đó vào firmware Ni-Oh để kết nối."
+echo -e "  Nhập URL đó vào firmware XiaoZhiVN để kết nối."
 echo ""
 

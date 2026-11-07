@@ -1,6 +1,6 @@
 """
-Free Weather Tool for Ni-Oh Server
-----------------------------------
+Free Weather Tool for XiaoZhiVN Server
+--------------------------------------
 Sử dụng Open-Meteo API: 100% Miễn phí, không cần bất kỳ API key nào.
 Tự động chuyển đổi tên tỉnh/thành phố Việt Nam sang tọa độ.
 """

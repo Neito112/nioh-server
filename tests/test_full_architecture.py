@@ -261,7 +261,7 @@ class TestNiOhDualServer(AioHTTPTestCase):
     async def test_07_mcp_and_tool_integration(self):
         from server.tools.mcp_manager import execute_server_tool, SERVER_TOOLS_SCHEMA
 
-        # 1. Test schema includes all 5 core tools
+        # 1. Test schema includes all tools
         tool_names = [t["function"]["name"] for t in SERVER_TOOLS_SCHEMA]
         self.assertIn("get_weather", tool_names)
         self.assertIn("get_vietnam_news", tool_names)
@@ -269,6 +269,10 @@ class TestNiOhDualServer(AioHTTPTestCase):
         self.assertIn("web_search", tool_names)
         self.assertIn("pc_control", tool_names)
         self.assertIn("play_radio", tool_names)
+        self.assertIn("get_gold_price", tool_names)
+        self.assertIn("get_stock_market", tool_names)
+        self.assertIn("generate_vietqr", tool_names)
+        self.assertIn("manage_alarm", tool_names)
 
         # 2. Test execution of server tools
         res_weather = await execute_server_tool("get_weather", {"location": "Đà Nẵng"})
@@ -276,6 +280,27 @@ class TestNiOhDualServer(AioHTTPTestCase):
 
         res_dt = await execute_server_tool("get_vietnam_datetime", {})
         self.assertIn("Bây giờ là", res_dt)
+
+        res_gold = await execute_server_tool("get_gold_price", {})
+        self.assertTrue(len(res_gold) > 10)
+
+        res_stock = await execute_server_tool("get_stock_market", {"symbol": "FPT"})
+        self.assertTrue(len(res_stock) > 10)
+
+        res_qr = await execute_server_tool("generate_vietqr", {
+            "bank": "mbbank",
+            "account_number": "0987654321",
+            "amount": 50000,
+            "description": "tien ca phe"
+        })
+        self.assertIn("MBBANK", res_qr.upper())
+
+        res_alarm = await execute_server_tool("manage_alarm", {
+            "action": "set_timer",
+            "minutes": 5,
+            "label": "Nấu mì"
+        })
+        self.assertIn("Nấu mì", res_alarm)
 
         # 3. Test Vision MCP Endpoint
         vis_resp = await self.client.get("/mcp/vision/explain")

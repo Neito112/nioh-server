@@ -1,6 +1,6 @@
 """
-Ni-Oh Config Sync
------------------
+XiaoZhiVN Config Sync
+----------------------
 Load config theo thứ tự ưu tiên:
   1. Biến môi trường (NIOH_*)
   2. File .env local

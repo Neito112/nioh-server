@@ -1,6 +1,6 @@
 """
-OTA Endpoint for Ni-Oh Firmware
---------------------------------
+OTA Endpoint for XiaoZhiVN Firmware
+------------------------------------
 ESP32 gọi vào đây để lấy danh sách WSS endpoints từ node registry.
 Thay thế OTA server của xiaozhi, trả thêm field `websocket_endpoints`.
 """
@@ -12,10 +12,10 @@ import aiohttp
 from aiohttp import web
 import logging
 
-logger = logging.getLogger("nioh.ota")
+logger = logging.getLogger("xiaozhivn.ota")
 
 
-class NiOhOtaServer:
+class XiaoZhiVnOtaServer:
     def __init__(self, registry, http_port: int = 8003):
         self.registry = registry
         self.http_port = http_port
@@ -24,29 +24,29 @@ class NiOhOtaServer:
 
     def _setup_routes(self):
         self.app.router.add_get("/xiaozhi/ota/", self.handle_ota)
-        self.app.router.add_get("/nioh/nodes", self.handle_nodes)
+        self.app.router.add_get("/xiaozhivn/nodes", self.handle_nodes)
         self.app.router.add_get("/health", self.handle_health)
 
     async def handle_ota(self, request: web.Request) -> web.Response:
         """
-        Trả về OTA response compatible với firmware xiaozhi/Ni-Oh.
+        Trả về OTA response compatible với firmware xiaozhi/XiaoZhiVN.
         Firmware check firmware_url để update, và dùng websocket để connect.
         """
         nodes = await self.registry.get_all_nodes()
         
         # Lấy node đầu tiên available
-        ws_url = nodes[0] if nodes else f"ws://localhost:{int(os.environ.get('NIOH_WS_PORT', 8000))}/xiaozhi/v1/"
+        ws_url = nodes[0] if nodes else f"ws://localhost:{int(os.environ.get('XIAOZHIVN_WS_PORT', 8000))}/xiaozhi/v1/"
 
         response = {
             "firmware": {
-                "version": os.environ.get("NIOH_FIRMWARE_VERSION", "2.5.3"),
-                "url": os.environ.get("NIOH_FIRMWARE_URL", ""),
+                "version": os.environ.get("XIAOZHIVN_FIRMWARE_VERSION", "2.5.3"),
+                "url": os.environ.get("XIAOZHIVN_FIRMWARE_URL", ""),
             },
             "websocket": {
                 "url": ws_url,
             },
-            # Ni-Oh extension: tất cả node URLs để firmware chọn
-            "nioh_nodes": nodes,
+            # XiaoZhiVN extension: tất cả node URLs để firmware chọn
+            "xiaozhivn_nodes": nodes,
         }
         return web.json_response(response)
 

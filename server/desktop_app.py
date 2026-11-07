@@ -370,6 +370,11 @@ async def run_server(port: int = 8001):
         await site.start()
         logger.info(f"XiaoZhiVN Server đã khởi chạy thành công tại http://localhost:{port}")
 
+        # Khởi chạy bộ giám sát hẹn giờ & báo thức thông minh (Proactive Wakeup / Alarms)
+        from server.tools.smart_alarm import run_alarm_monitor_loop
+        from server.voice_engine import ACTIVE_CONNECTIONS
+        asyncio.create_task(run_alarm_monitor_loop(lambda: ACTIVE_CONNECTIONS))
+
         open_browser(f"http://localhost:{port}")
 
         while True:

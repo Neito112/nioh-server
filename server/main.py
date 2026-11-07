@@ -1,6 +1,6 @@
 """
-Ni-Oh Server — Entry Point
---------------------------
+XiaoZhiVN Server — Entry Point
+------------------------------
 Thay thế app.py của xiaozhi-server.
 Thêm: Cloudflare Tunnel + Node Registry + Config Sync.
 """
@@ -20,7 +20,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 from sync.config_sync import load_nioh_config
 from cloudflare.tunnel import setup_tunnel, stop_tunnel
 
-logger = logging.getLogger("nioh.main")
+logger = logging.getLogger("xiaozhivn.main")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(name)s] %(levelname)s: %(message)s"
@@ -30,7 +30,7 @@ logging.basicConfig(
 async def main():
     print("""
 ╔══════════════════════════════════════════╗
-║          Ni-Oh Distributed Server        ║
+║         XiaoZhiVN Distributed Server     ║
 ║   Xiaozhi-compatible · OpenRouter ready  ║
 ╚══════════════════════════════════════════╝
 """)
@@ -39,7 +39,7 @@ async def main():
     config, registry = await load_nioh_config()
 
     if not config["llm"]["api_key"]:
-        logger.error("Chưa set NIOH_API_KEY! Chạy lại setup hoặc export NIOH_API_KEY=...")
+        logger.error("Chưa set XIAOZHIVN_API_KEY! Chạy lại setup hoặc export XIAOZHIVN_API_KEY=...")
         sys.exit(1)
 
     # 2. Khởi động Cloudflare Tunnel
@@ -115,5 +115,5 @@ if __name__ == "__main__":
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
-        print("\nNi-Oh Server đã tắt.")
+        print("\nXiaoZhiVN Server đã tắt.")
 

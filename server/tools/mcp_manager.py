@@ -28,6 +28,10 @@ from server.tools.free_search import search_web
 from server.tools.pc_control import execute_pc_command
 from server.tools.vietnam_datetime import get_vietnam_time_summary
 from server.tools.vietnam_news import get_vietnam_news
+from server.tools.vietnam_gold import get_vietnam_gold_price
+from server.tools.vietnam_stock import get_vietnam_stock_info
+from server.tools.vietnam_bank_qr import generate_vietnam_bank_qr
+from server.tools.smart_alarm import set_countdown_timer, set_alarm_clock, get_pending_alarms
 
 
 # ── ĐỊNH NGHĨA CÔNG CỤ MÁY CHỦ THUẦN VIỆT (SERVER TOOLS SCHEMA) ─────
@@ -130,6 +134,97 @@ SERVER_TOOLS_SCHEMA = [
                 "required": ["station_name"]
             }
         }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_gold_price",
+            "description": "Tra cứu giá vàng trong nước Việt Nam theo thời gian thực (SJC, DOJI, Vàng nhẫn 9999, Bảo Tín Minh Châu, Phú Quý). Sử dụng khi người dùng hỏi giá vàng hôm nay, giá vàng SJC, vàng nhẫn.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "gold_type": {
+                        "type": "string",
+                        "description": "Loại vàng cần tra cứu: 'sjc', 'nhẫn 9999', 'doji', 'btmc' hoặc để trống để lấy tổng quan."
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "get_stock_market",
+            "description": "Tra cứu thị trường chứng khoán Việt Nam (chỉ số VN-Index, HNX-Index) hoặc giá cổ phiếu chi tiết (FPT, VCB, HPG, SSI, VIC, v.v.) theo thời gian thực.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "symbol": {
+                        "type": "string",
+                        "description": "Mã cổ phiếu (ví dụ: 'FPT', 'VCB', 'HPG') hoặc 'VNINDEX' để lấy chỉ số thị trường."
+                    }
+                }
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "generate_vietqr",
+            "description": "Tạo mã QR thanh toán ngân hàng Napas 247 VietQR khi người dùng muốn nhận tiền hoặc thanh toán qua chuyển khoản ngân hàng (Vietcombank, MB Bank, Techcombank, BIDV...).",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "bank": {
+                        "type": "string",
+                        "description": "Tên ngân hàng: 'vcb' (Vietcombank), 'mb' (MB Bank), 'tcb' (Techcombank), 'bidv', 'ctg' (VietinBank), 'acb', 'vpb'..."
+                    },
+                    "account_number": {
+                        "type": "string",
+                        "description": "Số tài khoản nhận tiền."
+                    },
+                    "amount": {
+                        "type": "integer",
+                        "description": "Số tiền cần chuyển (VNĐ), ví dụ 50000. Để 0 nếu không yêu cầu số tiền cố định."
+                    },
+                    "description": {
+                        "type": "string",
+                        "description": "Nội dung chuyển khoản ngắn gọn."
+                    }
+                },
+                "required": ["bank", "account_number"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "manage_alarm",
+            "description": "Cài đặt báo thức hoặc hẹn giờ đếm ngược cho người dùng. Server sẽ chủ động phát chuông và nhắc nhở bằng giọng nói qua mạch ESP32 khi đến giờ.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "action": {
+                        "type": "string",
+                        "enum": ["set_timer", "set_alarm", "list"],
+                        "description": "'set_timer' (hẹn N phút), 'set_alarm' (đặt mốc giờ cụ thể như 06:30), hoặc 'list' (xem danh sách)."
+                    },
+                    "minutes": {
+                        "type": "number",
+                        "description": "Số phút cho hẹn giờ (áp dụng khi action='set_timer')."
+                    },
+                    "time_str": {
+                        "type": "string",
+                        "description": "Mốc giờ báo thức dạng HH:MM (ví dụ '07:00', '18:30') khi action='set_alarm'."
+                    },
+                    "label": {
+                        "type": "string",
+                        "description": "Nội dung nhắc nhở hoặc tên báo thức (ví dụ: 'Nấu mì', 'Thức dậy', 'Họp công ty')."
+                    }
+                },
+                "required": ["action"]
+            }
+        }
     }
 ]
 
@@ -162,6 +257,39 @@ async def execute_server_tool(tool_name: str, args: dict) -> str:
             cmd = args.get("command", "")
             res = execute_pc_command(cmd)
             return res.get("message", "Đã gửi lệnh điều khiển máy tính.")
+
+        elif tool_name == "get_gold_price":
+            gt = args.get("gold_type", "")
+            res = await get_vietnam_gold_price(gt)
+            return res.get("summary", "Không tìm thấy dữ liệu giá vàng.")
+
+        elif tool_name == "get_stock_market":
+            sym = args.get("symbol", "")
+            res = await get_vietnam_stock_info(sym)
+            return res.get("summary", "Không tìm thấy dữ liệu chứng khoán.")
+
+        elif tool_name == "generate_vietqr":
+            bank = args.get("bank", "vcb")
+            acc = args.get("account_number", "")
+            amt = args.get("amount", 0)
+            desc = args.get("description", "")
+            res = generate_vietnam_bank_qr(bank, acc, amount=amt, description=desc)
+            return res.get("summary", "Không thể tạo mã VietQR.")
+
+        elif tool_name == "manage_alarm":
+            act = args.get("action", "list")
+            lbl = args.get("label", "Báo thức")
+            if act == "set_timer":
+                mins = args.get("minutes", 5)
+                res = set_countdown_timer("", float(mins), label=lbl)
+                return res.get("summary")
+            elif act == "set_alarm":
+                t_str = args.get("time_str", "07:00")
+                res = set_alarm_clock("", t_str, label=lbl)
+                return res.get("summary")
+            else:
+                res = get_pending_alarms("")
+                return res.get("summary")
 
         return f"Công cụ {tool_name} không được hỗ trợ trên máy chủ."
     except Exception as e:

@@ -1,6 +1,6 @@
 """
-PC System Control Tool for Ni-Oh Server
----------------------------------------
+PC System Control Tool for XiaoZhiVN Server
+-------------------------------------------
 Cho phép ESP32 điều khiển trực tiếp PC đang chạy server
 hoặc gửi gói Wake-on-LAN tới các PC khác trong mạng LAN.
 """

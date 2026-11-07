@@ -1,6 +1,6 @@
 """
-Ni-Oh Server Node Registry
---------------------------
+XiaoZhiVN Server Node Registry
+------------------------------
 Dùng GitHub Gist làm config store miễn phí.
 Mỗi node đăng ký WSS endpoint của mình vào Gist khi khởi động.
 ESP32 lấy danh sách endpoints từ Gist qua HTTP.
@@ -64,7 +64,7 @@ class NodeRegistry:
     async def _create_gist(self, session: aiohttp.ClientSession) -> str:
         """Tạo Gist mới nếu chưa có, trả về gist_id."""
         payload = {
-            "description": "Ni-Oh Server Node Registry",
+            "description": "XiaoZhiVN Server Node Registry",
             "public": False,
             "files": {
                 GIST_FILENAME: {
