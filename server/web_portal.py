@@ -2,11 +2,12 @@
 Ni-Oh Device Management Web Portal (Production)
 ------------------------------------------------
 Hệ thống Quản lý Thiết bị & Xác thực Người dùng:
-- Đăng nhập Google mượt mà (hỗ trợ cả Google OAuth chuẩn và Xác thực Google trực tiếp)
-- Đăng nhập Zalo
-- Đăng ký / Đăng nhập tài khoản cá nhân (Email & Mật khẩu) lưu trữ SQLite
-- Quản lý & ghép đôi thiết bị ESP32 qua mã PIN 6 số trên màn hình
-- Cấu hình Model AI (DeepSeek V3, Gemini Flash 2.0 Free...), Prompt, TTS giọng Việt
+- Thiết kế chuẩn mực, chuyên nghiệp, hiện đại (tương tự xiaozhi.me)
+- Xác thực người dùng thực tế qua cơ sở dữ liệu SQLite (data/portal.db)
+- Quản lý danh sách thiết bị, trạng thái kết nối thời gian thực (Online / Offline)
+- Ghép đôi mạch ESP32 bằng MÃ PIN 6 SỐ hiển thị trên màn hình bo mạch
+- Cấu hình từng thiết bị: Mô hình AI (DeepSeek, Gemini...), API Key, Giọng nói TTS, System Prompt
+- Bảng thông số kết nối trực tiếp cho mạch ESP32 (WSS & OTA Endpoint)
 """
 
 import os
@@ -25,13 +26,13 @@ os.makedirs(DATA_DIR, exist_ok=True)
 DB_PATH = os.path.join(DATA_DIR, "portal.db")
 
 
-# ── KHỞI TẠO CƠ SỞ DỮ LIỆU SQLITE THỰC TẾ ──────────────────
+# ── KHỞI TẠO DATABASE SQLITE THỰC TẾ ────────────────────────
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
     
-    # Bảng người dùng
+    # Bảng người dùng thực tế
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
@@ -44,7 +45,7 @@ def init_db():
     )
     """)
     
-    # Bảng thiết bị
+    # Bảng thiết bị ghép đôi
     cursor.execute("""
     CREATE TABLE IF NOT EXISTS devices (
         device_id TEXT PRIMARY KEY,
@@ -54,18 +55,10 @@ def init_db():
         api_key TEXT DEFAULT '',
         voice TEXT DEFAULT 'vi-VN-HoaiMyNeural',
         prompt TEXT,
-        status TEXT DEFAULT 'online',
+        status TEXT DEFAULT 'offline',
         pairing_code TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
         FOREIGN KEY(user_id) REFERENCES users(id)
-    )
-    """)
-    
-    # Bảng cấu hình OAuth
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS oauth_config (
-        key TEXT PRIMARY KEY,
-        value TEXT
     )
     """)
     
@@ -76,13 +69,13 @@ init_db()
 
 
 def _hash_pw(password: str) -> str:
-    return hashlib.sha256(password.encode()).hexdigest()
+    return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
-# ── REST API CHO XÁC THỰC NGƯỜI DÙNG ───────────────────────
+# ── REST API XÁC THỰC NGƯỜI DÙNG THỰC TẾ ───────────────────
 
 async def api_portal_register(request):
-    """Đăng ký tài khoản cá nhân mới bằng Email & Mật khẩu."""
+    """Đăng ký tài khoản người dùng mới vào database."""
     data = await request.json()
     email = data.get("email", "").strip().lower()
     password = data.get("password", "").strip()
@@ -97,123 +90,56 @@ async def api_portal_register(request):
     cursor = conn.cursor()
     try:
         user_id = f"usr_{hashlib.md5(email.encode()).hexdigest()[:12]}"
+        avatar = f"https://ui-avatars.com/api/?name={name}&background=2563eb&color=fff"
         cursor.execute(
-            "INSERT INTO users (id, email, password_hash, name, provider) VALUES (?, ?, ?, ?, 'local')",
-            (user_id, email, _hash_pw(password), name)
+            "INSERT INTO users (id, email, password_hash, name, avatar, provider) VALUES (?, ?, ?, ?, ?, 'local')",
+            (user_id, email, _hash_pw(password), name, avatar)
         )
         conn.commit()
-        user = {"user_id": user_id, "email": email, "name": name, "provider": "local"}
+        user = {"user_id": user_id, "email": email, "name": name, "avatar": avatar}
         return web.json_response({"success": True, "message": "Đăng ký tài khoản thành công!", "user": user})
     except sqlite3.IntegrityError:
-        return web.json_response({"success": False, "message": "Email này đã được đăng ký! Vui lòng chọn Đăng Nhập."})
+        return web.json_response({"success": False, "message": "Email này đã được sử dụng. Vui lòng chuyển sang tab Đăng Nhập!"})
     finally:
         conn.close()
 
 
 async def api_portal_login(request):
-    """Đăng nhập bằng Email & Mật khẩu."""
+    """Đăng nhập tài khoản bằng email và mật khẩu."""
     data = await request.json()
     email = data.get("email", "").strip().lower()
     password = data.get("password", "").strip()
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT id, email, name, avatar, provider FROM users WHERE email = ? AND password_hash = ?", (email, _hash_pw(password)))
+    cursor.execute(
+        "SELECT id, email, name, avatar FROM users WHERE email = ? AND password_hash = ?",
+        (email, _hash_pw(password))
+    )
     row = cursor.fetchone()
     conn.close()
 
     if row:
-        user = {"user_id": row[0], "email": row[1], "name": row[2], "avatar": row[3], "provider": row[4]}
+        user = {"user_id": row[0], "email": row[1], "name": row[2], "avatar": row[3]}
         return web.json_response({"success": True, "user": user})
     else:
         return web.json_response({"success": False, "message": "Sai email hoặc mật khẩu!"})
 
 
-async def api_portal_google_auth(request):
-    """Xác thực Google qua JWT credential hoặc đăng nhập trực tiếp."""
-    data = await request.json()
-    email = data.get("email", "").strip()
-    name = data.get("name", "").strip() or (email.split("@")[0] if email else "Người dùng Google")
-    credential = data.get("credential")
-
-    if credential:
-        try:
-            import base64
-            payload_b64 = credential.split(".")[1]
-            payload_b64 += "=" * ((4 - len(payload_b64) % 4) % 4)
-            payload_json = json.loads(base64.urlsafe_b64decode(payload_b64).decode("utf-8"))
-            email = payload_json.get("email", email)
-            name = payload_json.get("name", name)
-        except Exception:
-            pass
-
-    if not email or "@" not in email:
-        return web.json_response({"success": False, "message": "Email Google không hợp lệ!"})
-
-    user_id = f"google_{hashlib.md5(email.encode()).hexdigest()[:12]}"
-    avatar = f"https://ui-avatars.com/api/?name={name}&background=4285F4&color=fff"
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, email, name, avatar FROM users WHERE email = ?", (email,))
-    existing = cursor.fetchone()
-
-    if not existing:
-        cursor.execute(
-            "INSERT INTO users (id, email, name, avatar, provider) VALUES (?, ?, ?, ?, 'google')",
-            (user_id, email, name, avatar)
-        )
-        conn.commit()
-    else:
-        user_id = existing[0]
-
-    conn.close()
-    user = {"user_id": user_id, "email": email, "name": name, "avatar": avatar, "provider": "google"}
-    return web.json_response({"success": True, "user": user})
-
-
-async def api_portal_zalo_auth(request):
-    """Xác thực đăng nhập Zalo."""
-    data = await request.json()
-    phone_or_id = data.get("account", "").strip()
-    name = data.get("name", "").strip() or f"Zalo User ({phone_or_id[-4:] if len(phone_or_id) >= 4 else 'VN'})"
-
-    if not phone_or_id:
-        return web.json_response({"success": False, "message": "Vui lòng nhập số điện thoại hoặc tên Zalo!"})
-
-    email = f"{phone_or_id}@zalo.me"
-    user_id = f"zalo_{hashlib.md5(phone_or_id.encode()).hexdigest()[:12]}"
-    avatar = f"https://ui-avatars.com/api/?name={name}&background=0068FF&color=fff"
-
-    conn = sqlite3.connect(DB_PATH)
-    cursor = conn.cursor()
-    cursor.execute("SELECT id, email, name, avatar FROM users WHERE email = ?", (email,))
-    existing = cursor.fetchone()
-
-    if not existing:
-        cursor.execute(
-            "INSERT INTO users (id, email, name, avatar, provider) VALUES (?, ?, ?, ?, 'zalo')",
-            (user_id, email, name, avatar)
-        )
-        conn.commit()
-    else:
-        user_id = existing[0]
-
-    conn.close()
-    user = {"user_id": user_id, "email": email, "name": name, "avatar": avatar, "provider": "zalo"}
-    return web.json_response({"success": True, "user": user})
-
-
-# ── REST API CHO QUẢN LÝ THIẾT BỊ ──────────────────────────
+# ── REST API QUẢN LÝ THIẾT BỊ ──────────────────────────────
 
 async def api_portal_get_devices(request):
+    """Lấy danh sách thiết bị của tài khoản đang đăng nhập."""
     user_id = request.query.get("user_id")
     if not user_id:
         return web.json_response({"success": False, "devices": []})
 
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
-    cursor.execute("SELECT device_id, name, model, api_key, voice, prompt, status, pairing_code FROM devices WHERE user_id = ?", (user_id,))
+    cursor.execute(
+        "SELECT device_id, name, model, api_key, voice, prompt, status, pairing_code FROM devices WHERE user_id = ? ORDER BY created_at DESC",
+        (user_id,)
+    )
     rows = cursor.fetchall()
     conn.close()
 
@@ -233,10 +159,11 @@ async def api_portal_get_devices(request):
 
 
 async def api_portal_bind_device(request):
+    """Ghép đôi thiết bị bằng mã PIN 6 số hiển thị trên màn hình mạch."""
     data = await request.json()
     user_id = data.get("user_id")
     code = data.get("pairing_code", "").strip()
-    bot_name = data.get("bot_name", "Ni-Oh S3 Mini").strip()
+    bot_name = data.get("bot_name", "Ni-Oh S3 Bot").strip()
 
     if not user_id:
         return web.json_response({"success": False, "message": "Vui lòng đăng nhập trước khi ghép đôi thiết bị!"})
@@ -247,15 +174,15 @@ async def api_portal_bind_device(request):
     conn = sqlite3.connect(DB_PATH)
     cursor = conn.cursor()
 
-    cursor.execute("SELECT user_id FROM devices WHERE device_id = ?", (device_id,))
+    cursor.execute("SELECT user_id, name FROM devices WHERE device_id = ?", (device_id,))
     existing = cursor.fetchone()
     if existing:
         conn.close()
-        return web.json_response({"success": False, "message": "Thiết bị mang mã này đã được ghép đôi trong hệ thống!"})
+        return web.json_response({"success": False, "message": f"Mạch mang mã '{code}' đã được ghép đôi trong hệ thống!"})
 
     prompt_default = "Bạn là Ni-Oh, trợ lý giọng nói thông minh, vui tính, hài hước và nhiệt tình hỗ trợ."
     cursor.execute(
-        "INSERT INTO devices (device_id, user_id, name, model, voice, prompt, pairing_code) VALUES (?, ?, ?, 'deepseek/deepseek-chat', 'vi-VN-HoaiMyNeural', ?, ?)",
+        "INSERT INTO devices (device_id, user_id, name, model, voice, prompt, pairing_code, status) VALUES (?, ?, ?, 'deepseek/deepseek-chat', 'vi-VN-HoaiMyNeural', ?, ?, 'offline')",
         (device_id, user_id, bot_name, prompt_default, code)
     )
     conn.commit()
@@ -265,6 +192,7 @@ async def api_portal_bind_device(request):
 
 
 async def api_portal_update_device(request):
+    """Cập nhật cài đặt riêng cho thiết bị."""
     data = await request.json()
     user_id = data.get("user_id")
     device_id = data.get("device_id")
@@ -278,10 +206,25 @@ async def api_portal_update_device(request):
     conn.commit()
     conn.close()
 
-    return web.json_response({"success": True, "message": "Đã cập nhật cấu hình thiết bị thành công!"})
+    return web.json_response({"success": True, "message": "Đã lưu cài đặt cho thiết bị thành công!"})
 
 
-# ── GIAO DIỆN WEB PORTAL QUẢN LÝ THIẾT BỊ ──────────────────
+async def api_portal_delete_device(request):
+    """Hủy ghép đôi thiết bị."""
+    data = await request.json()
+    user_id = data.get("user_id")
+    device_id = data.get("device_id")
+
+    conn = sqlite3.connect(DB_PATH)
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM devices WHERE device_id = ? AND user_id = ?", (device_id, user_id))
+    conn.commit()
+    conn.close()
+
+    return web.json_response({"success": True, "message": "Đã hủy ghép đôi thiết bị khỏi tài khoản!"})
+
+
+# ── GIAO DIỆN WEB PORTAL (HTML/CSS/JS) ──────────────────────
 
 HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
 <html lang="vi">
@@ -296,8 +239,8 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             --success: #16a34a; --danger: #ef4444;
         }
         * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background: var(--bg); color: var(--text); padding-bottom: 50px; }
-        .navbar { background: var(--panel); border-bottom: 1px solid var(--border); padding: 14px 28px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
+        body { background: var(--bg); color: var(--text); padding-bottom: 60px; min-height: 100vh; }
+        .navbar { background: var(--panel); border-bottom: 1px solid var(--border); padding: 14px 28px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
         .brand { font-size: 20px; font-weight: 800; color: var(--primary); display: flex; align-items: center; gap: 8px; }
         .container { max-width: 950px; margin: 30px auto; padding: 0 16px; }
         
@@ -305,34 +248,33 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         .auth-title { font-size: 22px; font-weight: 800; margin-bottom: 8px; text-align: center; }
         .auth-desc { font-size: 13px; color: var(--muted); text-align: center; margin-bottom: 24px; }
         
-        .social-login-group { display: flex; flex-direction: column; gap: 10px; margin-bottom: 18px; }
-        .btn-social { width: 100%; padding: 11px; border-radius: 8px; font-weight: 600; font-size: 14px; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 10px; border: 1px solid var(--border); transition: 0.2s; background: white; color: #1e293b; }
-        .btn-social:hover { background: #f8fafc; border-color: #cbd5e1; }
-        .btn-zalo { color: #0068ff; border-color: #0068ff; }
-        .btn-zalo:hover { background: #eff6ff; }
-
         .auth-tab { display: flex; border-bottom: 2px solid var(--border); margin-bottom: 20px; }
         .auth-tab button { flex: 1; padding: 10px; background: none; border: none; font-weight: 700; cursor: pointer; color: var(--muted); font-size: 14px; }
         .auth-tab button.active { color: var(--primary); border-bottom: 2px solid var(--primary); margin-bottom: -2px; }
         
         .input-group { margin-bottom: 14px; }
         label { display: block; font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 6px; }
-        input, select, textarea { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; outline: none; }
-        input:focus, select:focus, textarea:focus { border-color: var(--primary); }
-        .btn { width: 100%; padding: 11px; background: var(--primary); color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px; }
-        .btn:hover { background: var(--primary-hover); }
+        input, select, textarea { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; outline: none; transition: 0.2s; }
+        input:focus, select:focus, textarea:focus { border-color: var(--primary); box-shadow: 0 0 0 3px rgba(37,99,235,0.1); }
         
-        .divider { display: flex; align-items: center; text-align: center; margin: 18px 0; color: var(--muted); font-size: 12px; }
-        .divider::before, .divider::after { content: ''; flex: 1; border-bottom: 1px solid var(--border); }
-        .divider::before { margin-right: .5em; } .divider::after { margin-left: .5em; }
+        .btn { width: 100%; padding: 11px; background: var(--primary); color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px; transition: 0.2s; }
+        .btn:hover { background: var(--primary-hover); }
+        .btn-secondary { background: #f1f5f9; color: #334155; }
+        .btn-secondary:hover { background: #e2e8f0; }
 
-        .device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; margin-top: 20px; }
-        .device-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px; cursor: pointer; transition: 0.2s; }
+        .device-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 20px; margin-top: 20px; }
+        .device-card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 20px; cursor: pointer; transition: 0.2s; position: relative; }
         .device-card:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05); }
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; background: var(--success); margin-right: 6px; }
-
-        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 200; }
-        .modal { background: var(--panel); border-radius: 16px; width: 100%; max-width: 480px; padding: 28px; }
+        
+        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
+        .dot-online { background: var(--success); box-shadow: 0 0 6px rgba(34,197,94,0.5); }
+        .dot-offline { background: var(--muted); }
+        
+        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 200; backdrop-filter: blur(2px); }
+        .modal { background: var(--panel); border-radius: 16px; width: 100%; max-width: 520px; padding: 28px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.1); }
+        
+        .info-box { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; padding: 16px; margin-top: 24px; font-size: 13px; line-height: 1.6; }
+        .endpoint-code { background: #ffffff; border: 1px solid #cbd5e1; padding: 4px 8px; border-radius: 6px; font-family: monospace; font-size: 12px; color: #0369a1; }
     </style>
 </head>
 <body>
@@ -348,22 +290,8 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
     <div class="container">
         <!-- MÀN HÌNH ĐĂNG NHẬP / ĐĂNG KÝ -->
         <div id="authScreen" class="auth-card">
-            <div class="auth-title">Đăng Nhập Tài Khoản</div>
-            <div class="auth-desc">Quản lý và ghép đôi các mạch trợ lý giọng nói của bạn</div>
-
-            <!-- Các nút đăng nhập liên kết mạng xã hội -->
-            <div class="social-login-group">
-                <button class="btn-social" onclick="openGoogleModal()">
-                    <svg width="18" height="18" viewBox="0 0 24 24"><path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.88c2.27-2.09 3.58-5.17 3.58-8.85z"/><path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.24v3.15C3.26 21.36 7.35 24 12 24z"/><path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.24C.45 8.15 0 9.99 0 12s.45 3.85 1.24 5.42l4.04-3.15z"/><path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.35 0 3.26 2.64 1.24 6.58l4.04 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/></svg>
-                    Đăng nhập bằng tài khoản Google
-                </button>
-                <button class="btn-social btn-zalo" onclick="openZaloModal()">
-                    <span style="font-weight: 900; font-size: 16px;">Z</span>
-                    Đăng nhập bằng tài khoản Zalo
-                </button>
-            </div>
-
-            <div class="divider">HOẶC DÙNG EMAIL & MẬT KHẨU</div>
+            <div class="auth-title">Cổng Quản Lý Thiết Bị</div>
+            <div class="auth-desc">Đăng nhập tài khoản để quản lý và cấu hình robot giọng nói của bạn</div>
 
             <div class="auth-tab">
                 <button id="tabLogin" class="active" onclick="switchTab('login')">Đăng Nhập</button>
@@ -372,7 +300,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
 
             <form id="authForm" onsubmit="handleAuthSubmit(event)">
                 <div class="input-group" id="nameGroup" style="display: none;">
-                    <label>Họ và tên</label>
+                    <label>Họ và tên của bạn</label>
                     <input type="text" id="authName" placeholder="Nguyễn Văn A">
                 </div>
                 <div class="input-group">
@@ -389,60 +317,23 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
 
         <!-- MÀN HÌNH QUẢN LÝ THIẾT BỊ (Sau khi đăng nhập) -->
         <div id="dashboardScreen" style="display: none;">
-            <div style="display: flex; justify-content: space-between; align-items: center;">
+            <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
                 <div>
                     <h2 style="font-size: 22px; font-weight: 800;">Thiết Bị Của Tôi</h2>
                     <span style="color: var(--muted); font-size: 13px;">Ghép đôi thiết bị bằng mã PIN 6 số trên màn hình mạch</span>
                 </div>
-                <button class="btn" style="width: auto; padding: 10px 18px;" onclick="openBindModal()">+ Thêm Thiết Bị Mới</button>
+                <button class="btn" style="width: auto; padding: 10px 20px;" onclick="openBindModal()">+ Thêm Thiết Bị Mới</button>
             </div>
 
             <div class="device-grid" id="deviceGrid"></div>
-        </div>
-    </div>
 
-    <!-- Modal Đăng Nhập Google Trực Tiếp -->
-    <div class="modal-overlay" id="googleModal">
-        <div class="modal">
-            <div style="text-align: center; margin-bottom: 16px;">
-                <svg width="36" height="36" viewBox="0 0 24 24"><path fill="#4285F4" d="M23.745 12.27c0-.7-.06-1.4-.19-2.07H12v4.51h6.6c-.29 1.52-1.14 2.8-2.4 3.66v3.05h3.88c2.27-2.09 3.58-5.17 3.58-8.85z"/><path fill="#34A853" d="M12 24c3.24 0 5.95-1.08 7.93-2.91l-3.88-3.05c-1.08.72-2.45 1.16-4.05 1.16-3.12 0-5.77-2.1-6.72-4.93H1.24v3.15C3.26 21.36 7.35 24 12 24z"/><path fill="#FBBC05" d="M5.28 14.27c-.25-.72-.38-1.49-.38-2.27s.13-1.55.38-2.27V6.58H1.24C.45 8.15 0 9.99 0 12s.45 3.85 1.24 5.42l4.04-3.15z"/><path fill="#EA4335" d="M12 4.75c1.77 0 3.35.61 4.6 1.8l3.42-3.42C17.95 1.19 15.24 0 12 0 7.35 0 3.26 2.64 1.24 6.58l4.04 3.15c.95-2.83 3.6-4.98 6.72-4.98z"/></svg>
-                <h3 style="font-size: 18px; margin-top: 8px;">Đăng Nhập Bằng Google</h3>
-                <p style="font-size: 13px; color: var(--muted);">Chọn hoặc nhập tài khoản Google của bạn</p>
-            </div>
-            <div class="input-group">
-                <label>Email Google của bạn</label>
-                <input type="email" id="googleEmailInput" placeholder="tenbancuaban@gmail.com">
-            </div>
-            <div class="input-group">
-                <label>Tên hiển thị</label>
-                <input type="text" id="googleNameInput" placeholder="Nguyễn Văn A">
-            </div>
-            <div style="display: flex; gap: 10px; margin-top: 20px;">
-                <button class="btn" onclick="submitGoogleLogin()">Tiếp Tục Với Google</button>
-                <button class="btn" style="background: #e2e8f0; color: #475569;" onclick="closeGoogleModal()">Hủy</button>
-            </div>
-        </div>
-    </div>
-
-    <!-- Modal Đăng Nhập Zalo Trực Tiếp -->
-    <div class="modal-overlay" id="zaloModal">
-        <div class="modal">
-            <div style="text-align: center; margin-bottom: 16px;">
-                <div style="background: #0068ff; color: white; width: 44px; height: 44px; border-radius: 50%; display: inline-flex; align-items: center; justify-content: center; font-weight: 900; font-size: 20px;">Z</div>
-                <h3 style="font-size: 18px; margin-top: 8px;">Đăng Nhập Bằng Zalo</h3>
-                <p style="font-size: 13px; color: var(--muted);">Nhập số điện thoại tài khoản Zalo của bạn</p>
-            </div>
-            <div class="input-group">
-                <label>Số điện thoại Zalo</label>
-                <input type="tel" id="zaloPhoneInput" placeholder="0912345678">
-            </div>
-            <div class="input-group">
-                <label>Tên hiển thị</label>
-                <input type="text" id="zaloNameInput" placeholder="Tên Zalo của bạn">
-            </div>
-            <div style="display: flex; gap: 10px; margin-top: 20px;">
-                <button class="btn" style="background: #0068ff;" onclick="submitZaloLogin()">Đăng Nhập Với Zalo</button>
-                <button class="btn" style="background: #e2e8f0; color: #475569;" onclick="closeZaloModal()">Hủy</button>
+            <!-- Bảng thông số kết nối Endpoint cho mạch ESP32 -->
+            <div class="info-box">
+                <strong>📡 Thông Số Kết Nối Server Dành Cho Firmware ESP32:</strong><br>
+                <div style="margin-top: 8px;">
+                    • <strong>WebSocket Audio (WSS):</strong> <span class="endpoint-code" id="liveWssEndpoint">wss://.../xiaozhi/v1/</span><br>
+                    • <strong>OTA Firmware Update:</strong> <span class="endpoint-code" id="liveOtaEndpoint">https://.../xiaozhi/ota/</span>
+                </div>
             </div>
         </div>
     </div>
@@ -450,21 +341,21 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
     <!-- Modal Ghép Đôi 6 Số -->
     <div class="modal-overlay" id="bindModal">
         <div class="modal">
-            <h3 style="font-size: 18px; margin-bottom: 12px;">🔗 Ghép Đôi Thiết Bị Mới</h3>
-            <p style="color: var(--muted); font-size: 13px; margin-bottom: 16px;">
-                Bật nguồn mạch ESP32, màn hình sẽ hiện <strong>mã 6 chữ số</strong>. Hãy nhập mã đó vào đây:
+            <h3 style="font-size: 18px; margin-bottom: 10px;">🔗 Ghép Đôi Thiết Bị Mới</h3>
+            <p style="color: var(--muted); font-size: 13px; margin-bottom: 18px;">
+                Bật nguồn mạch ESP32, màn hình LCD sẽ hiện <strong>mã 6 chữ số</strong>. Hãy nhập mã đó vào đây:
             </p>
             <div class="input-group">
                 <label>Mã 6 Số trên màn hình mạch</label>
-                <input type="text" id="pinInput" maxlength="6" style="font-size: 24px; font-weight: bold; text-align: center; letter-spacing: 8px;" placeholder="123456">
+                <input type="text" id="pinInput" maxlength="6" style="font-size: 26px; font-weight: 800; text-align: center; letter-spacing: 8px;" placeholder="123456">
             </div>
             <div class="input-group">
                 <label>Đặt tên cho thiết bị</label>
-                <input type="text" id="botNameInput" value="Ni-Oh S3 Mini">
+                <input type="text" id="botNameInput" value="Ni-Oh S3 Bot">
             </div>
-            <div style="display: flex; gap: 10px; margin-top: 20px;">
+            <div style="display: flex; gap: 10px; margin-top: 22px;">
                 <button class="btn" onclick="submitBindDevice()">Ghép Đôi Thiết Bị</button>
-                <button class="btn" style="background: #e2e8f0; color: #475569;" onclick="closeBindModal()">Hủy</button>
+                <button class="btn btn-secondary" onclick="closeBindModal()">Hủy</button>
             </div>
         </div>
     </div>
@@ -482,7 +373,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             <div class="input-group">
                 <label>Mô Hình AI (Model):</label>
                 <select id="cfgModel">
-                    <option value="deepseek/deepseek-chat">⭐ DeepSeek V3 (Khuyên dùng: Nhanh, Tiếng Việt chuẩn)</option>
+                    <option value="deepseek/deepseek-chat">⭐ DeepSeek V3 (Nhanh, Tiếng Việt chuẩn xác)</option>
                     <option value="google/gemini-2.0-flash:free">🎁 Google Gemini 2.0 Flash (FREE 100%, Siêu tốc)</option>
                     <option value="openai/gpt-4o-mini">⚡ GPT-4o Mini (Phản hồi cực nhanh)</option>
                     <option value="anthropic/claude-3.5-sonnet">👑 Claude 3.5 Sonnet (Thông minh nhất)</option>
@@ -492,16 +383,15 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             </div>
 
             <div class="input-group">
-                <label>API Key Cá Nhân của Bạn (Tùy chọn)</label>
+                <label>API Key Cá Nhân Của Bạn (Tùy chọn)</label>
                 <input type="password" id="cfgApiKey" placeholder="sk-xxxx (Bỏ trống = dùng key mặc định của server)">
             </div>
 
             <div class="input-group">
-                <label>Giọng Nói (TTS Tiếng Việt):</label>
+                <label>Giọng Nói Tiếng Việt (TTS Neural):</label>
                 <select id="cfgVoice">
-                    <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ miền Bắc)</option>
-                    <option value="vi-VN-NamMinhNeural">Nam Minh (Nam miền Bắc)</option>
-                    <option value="vi-VN-BanMai">Ban Mai (Nữ miền Trung)</option>
+                    <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ miền Bắc - Trong trẻo, tự nhiên)</option>
+                    <option value="vi-VN-NamMinhNeural">Nam Minh (Nam miền Bắc - Trầm ấm, truyền cảm)</option>
                 </select>
             </div>
 
@@ -510,9 +400,10 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
                 <textarea id="cfgPrompt" rows="3"></textarea>
             </div>
 
-            <div style="display: flex; gap: 10px; margin-top: 20px;">
+            <div style="display: flex; gap: 10px; margin-top: 22px;">
                 <button class="btn" onclick="submitSaveDeviceConfig()">Lưu Cấu Hình</button>
-                <button class="btn" style="background: #e2e8f0; color: #475569;" onclick="closeConfigModal()">Đóng</button>
+                <button class="btn" style="background: #ef4444; color: white; width: auto; padding: 10px 16px;" onclick="submitDeleteDevice()">Hủy Ghép Đôi</button>
+                <button class="btn btn-secondary" style="width: auto; padding: 10px 16px;" onclick="closeConfigModal()">Đóng</button>
             </div>
         </div>
     </div>
@@ -523,52 +414,11 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         let userDevices = [];
         let selectedDevice = null;
 
-        function openGoogleModal() { document.getElementById('googleModal').style.display = 'flex'; }
-        function closeGoogleModal() { document.getElementById('googleModal').style.display = 'none'; }
-
-        async function submitGoogleLogin() {
-            const email = document.getElementById('googleEmailInput').value.trim();
-            const name = document.getElementById('googleNameInput').value.trim();
-            if (!email || !email.includes('@')) {
-                alert('Vui lòng nhập Email Google hợp lệ!');
-                return;
-            }
-            const res = await fetch('/api/portal/auth-google', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ email, name })
-            });
-            const data = await res.json();
-            if (data.success) {
-                closeGoogleModal();
-                onLoginSuccess(data.user);
-            } else {
-                alert(data.message);
-            }
-        }
-
-        function openZaloModal() { document.getElementById('zaloModal').style.display = 'flex'; }
-        function closeZaloModal() { document.getElementById('zaloModal').style.display = 'none'; }
-
-        async function submitZaloLogin() {
-            const phone = document.getElementById('zaloPhoneInput').value.trim();
-            const name = document.getElementById('zaloNameInput').value.trim();
-            if (!phone) {
-                alert('Vui lòng nhập số điện thoại Zalo!');
-                return;
-            }
-            const res = await fetch('/api/portal/auth-zalo', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ account: phone, name })
-            });
-            const data = await res.json();
-            if (data.success) {
-                closeZaloModal();
-                onLoginSuccess(data.user);
-            } else {
-                alert(data.message);
-            }
+        function updateEndpointsDisplay() {
+            const loc = window.location;
+            const wssProto = (loc.protocol === 'https:') ? 'wss:' : 'ws:';
+            document.getElementById('liveWssEndpoint').innerText = `${wssProto}//${loc.host}/xiaozhi/v1/`;
+            document.getElementById('liveOtaEndpoint').innerText = `${loc.protocol}//${loc.host}/xiaozhi/ota/`;
         }
 
         function switchTab(mode) {
@@ -610,6 +460,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
                 <div style="font-size: 13px;"><strong>${user.name}</strong><br><small style="color: var(--muted);">${user.email}</small></div>
                 <button onclick="logout()" style="background: none; border: 1px solid var(--border); padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; margin-left: 8px;">Thoát</button>
             `;
+            updateEndpointsDisplay();
             loadUserDevices();
         }
 
@@ -626,21 +477,27 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             userDevices = data.devices || [];
             const grid = document.getElementById('deviceGrid');
             if (userDevices.length === 0) {
-                grid.innerHTML = `<div style="grid-column: span 3; text-align: center; padding: 40px; color: var(--muted);">Chưa có thiết bị nào. Nhấp "+ Thêm Thiết Bị Mới" để ghép đôi bằng mã 6 số.</div>`;
+                grid.innerHTML = `<div style="grid-column: span 3; text-align: center; padding: 40px; color: var(--muted); border: 2px dashed var(--border); border-radius: 12px;">Bạn chưa ghép đôi thiết bị nào.<br>Hãy bấm <strong>"+ Thêm Thiết Bị Mới"</strong> để kết nối bằng mã 6 số hiển thị trên màn hình mạch ESP32.</div>`;
                 return;
             }
-            grid.innerHTML = userDevices.map(d => `
+            grid.innerHTML = userDevices.map(d => {
+                const isOnline = (d.status === 'online');
+                const dotClass = isOnline ? 'dot-online' : 'dot-offline';
+                const statusText = isOnline ? 'Đang hoạt động (Online)' : 'Ngoại tuyến (Offline)';
+                const statusColor = isOnline ? 'var(--success)' : 'var(--muted)';
+                return `
                 <div class="device-card" onclick="openConfigModal('${d.device_id}')">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 8px;">
-                        <strong>${d.name}</strong>
-                        <span style="font-size: 12px; color: var(--success);"><span class="status-dot"></span>${d.status}</span>
+                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
+                        <strong style="font-size: 15px;">${d.name}</strong>
+                        <span style="font-size: 12px; color: ${statusColor}; font-weight: 600;"><span class="status-dot ${dotClass}"></span>${statusText}</span>
                     </div>
                     <div style="font-size: 12px; color: var(--muted); margin-bottom: 12px;">Mã PIN: <strong>${d.pairing_code}</strong> | ID: ${d.device_id}</div>
-                    <div style="font-size: 13px; background: #f1f5f9; padding: 8px 12px; border-radius: 6px;">
-                        🤖 Model: <strong>${d.model.split('/')[1] || d.model}</strong>
+                    <div style="font-size: 13px; background: #f1f5f9; padding: 8px 12px; border-radius: 6px; display: flex; justify-content: space-between;">
+                        <span>🤖 Model: <strong>${d.model.split('/')[1] || d.model}</strong></span>
+                        <span style="color: var(--primary); font-size: 12px;">Cài đặt ⚙️</span>
                     </div>
                 </div>
-            `).join('');
+            `}).join('');
         }
 
         function openBindModal() { document.getElementById('bindModal').style.display = 'flex'; }
@@ -649,7 +506,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         async function submitBindDevice() {
             const pin = document.getElementById('pinInput').value.trim();
             const name = document.getElementById('botNameInput').value.trim();
-            if (pin.length !== 6) { alert('Vui lòng nhập đúng mã 6 số trên màn hình mạch!'); return; }
+            if (pin.length !== 6) { alert('Vui lòng nhập đúng mã 6 số hiển thị trên màn hình mạch!'); return; }
             const res = await fetch('/api/portal/bind', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
@@ -698,7 +555,21 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             loadUserDevices();
         }
 
-        // Khôi phục phiên đăng nhập nếu đã có
+        async function submitDeleteDevice() {
+            if (!selectedDevice) return;
+            if (!confirm(`Bạn có chắc muốn hủy ghép đôi thiết bị "${selectedDevice.name}"?`)) return;
+            const res = await fetch('/api/portal/delete-device', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ user_id: currentUser.user_id, device_id: selectedDevice.device_id })
+            });
+            const data = await res.json();
+            alert(data.message);
+            closeConfigModal();
+            loadUserDevices();
+        }
+
+        // Khôi phục phiên đăng nhập
         const saved = sessionStorage.getItem('nioh_user');
         if (saved) {
             try { onLoginSuccess(JSON.parse(saved)); } catch(e){}

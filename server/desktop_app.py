@@ -50,13 +50,12 @@ from server.gateway_app import (
 )
 from server.web_portal import (
     HTML_XIAOZHI_PORTAL,
-    api_portal_google_auth,
-    api_portal_zalo_auth,
     api_portal_login,
     api_portal_register,
     api_portal_get_devices,
     api_portal_bind_device,
-    api_portal_update_device
+    api_portal_update_device,
+    api_portal_delete_device
 )
 from server.voice_engine import handle_xiaozhi_websocket
 
@@ -111,13 +110,12 @@ def create_application(port: int = 8001):
 
     # ── 2. WEB PORTAL QUẢN LÝ THIẾT BỊ ──────────────────────
     app.router.add_get("/portal", lambda req: web.Response(text=HTML_XIAOZHI_PORTAL, content_type="text/html"))
-    app.router.add_post("/api/portal/auth-google", api_portal_google_auth)
-    app.router.add_post("/api/portal/auth-zalo", api_portal_zalo_auth)
     app.router.add_post("/api/portal/login", api_portal_login)
     app.router.add_post("/api/portal/register", api_portal_register)
     app.router.add_get("/api/portal/devices", api_portal_get_devices)
     app.router.add_post("/api/portal/bind", api_portal_bind_device)
     app.router.add_post("/api/portal/update-device", api_portal_update_device)
+    app.router.add_post("/api/portal/delete-device", api_portal_delete_device)
 
     # ── 3. CỔNG OTA & WEBSOCKET VOICE CHO ESP32 ───────────────
     app.router.add_get("/xiaozhi/ota/", handle_ota_request)
