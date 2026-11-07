@@ -1,23 +1,25 @@
 """
-Ni-Oh Server - Dual-Component Architecture
-------------------------------------------
-Thành phần 1: APP SERVER (Desktop Control Center):
-   - Mở giao diện setup những gì server sẽ cung cấp (Mô hình AI, Server API Key, Công cụ)
-   - Kích hoạt Cloudflare Tunnel và XUẤT 2 ĐƯỜNG LINK SERVER:
-     + Link Web Server: Dành cho người dùng/bạn bè truy cập từ xa để quản lý Agent (giống xiaozhi.me)
-     + Link WebSocket & OTA: Dành cho các mạch ESP32 Xiaozhi trỏ đến trực tiếp
-   - Bảng giám sát thời gian thực các mạch Xiaozhi đang online
+Ni-Oh Voice Server - Dual-Component Architecture
+------------------------------------------------
+Thành phần 1: APP SERVER (Desktop Host Console):
+   - Cấu hình nhà cung cấp LLM (OpenAI-compatible: DeepSeek, OpenRouter, OpenAI, Gemini, Ollama)
+   - Cấu hình giọng đọc Edge-TTS Neural và công cụ hệ thống (Weather, Search, PC Control)
+   - Kích hoạt Cloudflare Anycast Tunnel và xuất các điểm cuối công khai:
+     + Web Portal: Quản lý Trợ lý AI và thiết bị ESP32 từ xa
+     + WebSocket Voice Endpoint: Giao thức thoại cho firmware Xiaozhi
+     + OTA Endpoint: Cập nhật firmware thiết bị từ xa
+   - Giám sát các kết nối WebSocket thời gian thực (Live Client Sessions)
 
-Thành phần 2: WEB SERVER (Agent & Device Management Portal — xiaozhi.me):
-   - Quản lý Trợ lý AI (Agent): Tạo, sửa nhân vật, chọn Model AI, giọng TTS tiếng Việt, API Key riêng
-   - Quản lý Thiết bị (Devices): Ghép đôi mạch bằng MÃ PIN 6 SỐ trên màn hình LCD, gán mạch vào Agent
-   - Hướng dẫn cấu hình kết nối firmware
+Thành phần 2: WEB PORTAL (Web Console):
+   - Quản lý Trợ lý AI (Agents): Tạo, sửa nhân vật, cấu hình Model AI, giọng đọc TTS, System Prompt
+   - Quản lý Thiết bị (Devices): Ghép đôi mạch bằng mã PIN 6 số, gán Agent cho từng thiết bị
+   - Cung cấp thông số cấu hình firmware chuẩn
 
 Động cơ WebSocket Voice Engine:
-   - Giao thức bắt tay Hello Handshake Xiaozhi chuẩn tại /xiaozhi/v1/
+   - Giao thức bắt tay Hello Handshake Xiaozhi tại /xiaozhi/v1/
    - Giải mã âm thanh Opus 16000Hz (C-library pyogg.opus)
-   - Tích hợp công cụ: Thời tiết (Open-Meteo), Tìm kiếm (DuckDuckGo), Điều khiển PC
-   - Giọng đọc Microsoft Edge-TTS Neural tiếng Việt
+   - Thuật toán VAD năng lượng RMS
+   - Tổng hợp giọng đọc Microsoft Edge-TTS Neural
 """
 
 import os

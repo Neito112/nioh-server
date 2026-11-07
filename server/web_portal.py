@@ -1,12 +1,12 @@
 """
-Ni-Oh Web Server (Agent & Device Portal — xiaozhi.me style)
-------------------------------------------------------------
-Thành phần 2: WEB SERVER (Dành cho người dùng cuối)
-- Người dùng truy cập bằng đường LINK WEB được xuất ra từ App Server
-- Đăng ký & Đăng nhập tài khoản cá nhân
-- QUẢN LÝ AGENT (Tạo/Sửa các trợ lý AI: Model, Voice, Prompt, API Key riêng)
-- QUẢN LÝ THIẾT BỊ (Ghép đôi mạch Xiaozhi bằng mã PIN 6 số, Gán mạch vào Agent)
-- Giám sát trạng thái Online/Offline của từng con bot theo thời gian thực
+Ni-Oh Voice Portal (Web Server Console)
+---------------------------------------
+Thành phần 2: Giao diện Web quản trị dành cho người dùng:
+- Truy cập từ xa thông qua đường link Cloudflare được xuất ra từ App Server
+- Đăng nhập & Đăng ký tài khoản người dùng
+- Quản lý Trợ lý AI (Agents): Cấu hình nhân vật, model LLM, API Key riêng, giọng đọc TTS
+- Quản lý Thiết bị (Devices): Ghép đôi thiết bị bằng mã PIN 6 số, gán Agent cho từng mạch
+- Theo dõi trạng thái hoạt động thực tế của từng thiết bị
 """
 
 import os
@@ -18,38 +18,34 @@ import uuid
 import logging
 from aiohttp import web
 
-logger = logging.getLogger("nioh.web_server")
+logger = logging.getLogger("nioh.web_portal")
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB_PATH = os.path.join(BASE_DIR, "data", "portal.db")
 
+from server.voice_engine import ACTIVE_CONNECTIONS, get_server_runtime_config
 
-# ── KHỞI TẠO CƠ SỞ DỮ LIỆU ĐẦY ĐỦ CHO AGENT & THIẾT BỊ ─────
+
+# ── KHỞI TẠO CƠ SỞ DỮ LIỆU ĐẦY ĐỦ ─────────────────────────────────
 
 def init_db():
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    
-    # 1. Bảng người dùng
     c.execute("""
     CREATE TABLE IF NOT EXISTS users (
         id TEXT PRIMARY KEY,
         email TEXT UNIQUE,
         password_hash TEXT,
         name TEXT,
-        avatar TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
-    
-    # 2. Bảng Agent (Trợ lý AI - nhân vật)
     c.execute("""
     CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY,
         user_id TEXT,
         name TEXT,
-        avatar TEXT,
-        model TEXT DEFAULT 'deepseek/deepseek-chat',
+        model TEXT DEFAULT 'deepseek-chat',
         api_key TEXT DEFAULT '',
         voice TEXT DEFAULT 'vi-VN-HoaiMyNeural',
         prompt TEXT,
@@ -57,8 +53,6 @@ def init_db():
         FOREIGN KEY(user_id) REFERENCES users(id)
     )
     """)
-    
-    # 3. Bảng thiết bị ghép đôi (Devices)
     c.execute("""
     CREATE TABLE IF NOT EXISTS devices (
         device_id TEXT PRIMARY KEY,
@@ -72,7 +66,6 @@ def init_db():
         FOREIGN KEY(agent_id) REFERENCES agents(id)
     )
     """)
-    
     conn.commit()
     conn.close()
 
@@ -83,7 +76,7 @@ def _hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
-# ── REST API XÁC THỰC NGƯỜI DÙNG ───────────────────────────
+# ── REST API XÁC THỰC NGƯỜI DÙNG ───────────────────────────────────
 
 async def api_portal_register(request):
     data = await request.json()
@@ -92,31 +85,30 @@ async def api_portal_register(request):
     name = data.get("name", "").strip() or email.split("@")[0]
 
     if not email or "@" not in email:
-        return web.json_response({"success": False, "message": "Email không hợp lệ!"})
+        return web.json_response({"success": False, "message": "Địa chỉ email không hợp lệ."})
     if len(password) < 6:
-        return web.json_response({"success": False, "message": "Mật khẩu phải từ 6 ký tự trở lên!"})
+        return web.json_response({"success": False, "message": "Mật khẩu tối thiểu phải từ 6 ký tự trở lên."})
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     try:
-        user_id = f"usr_{hashlib.md5(email.encode()).hexdigest()[:12]}"
-        avatar = f"https://ui-avatars.com/api/?name={name}&background=2563eb&color=fff"
-        c.execute("INSERT INTO users (id, email, password_hash, name, avatar) VALUES (?, ?, ?, ?, ?)",
-                  (user_id, email, _hash_pw(password), name, avatar))
-        
-        # Tự động tạo 1 Agent mặc định cho người dùng mới
+        user_id = f"usr_{uuid.uuid4().hex[:10]}"
+        c.execute("INSERT INTO users (id, email, password_hash, name) VALUES (?, ?, ?, ?)",
+                  (user_id, email, _hash_pw(password), name))
+
+        # Tự động tạo 1 Agent mặc định cho tài khoản mới
         agent_id = f"ag_{uuid.uuid4().hex[:10]}"
         c.execute("""
-        INSERT INTO agents (id, user_id, name, avatar, model, voice, prompt)
-        VALUES (?, ?, 'Trợ Lý Ni-Oh', '🤖', 'deepseek/deepseek-chat', 'vi-VN-HoaiMyNeural',
-                'Bạn là Ni-Oh, trợ lý giọng nói thông minh, vui tính, hài hước và nhiệt tình hỗ trợ.')
+        INSERT INTO agents (id, user_id, name, model, voice, prompt)
+        VALUES (?, ?, 'Trợ Lý Mặc Định', 'deepseek-chat', 'vi-VN-HoaiMyNeural',
+                'Bạn là trợ lý AI thông minh, giao tiếp tiếng Việt tự nhiên và súc tích.')
         """, (agent_id, user_id))
 
         conn.commit()
-        user = {"user_id": user_id, "email": email, "name": name, "avatar": avatar}
-        return web.json_response({"success": True, "message": "Đăng ký tài khoản thành công!", "user": user})
+        user = {"user_id": user_id, "email": email, "name": name}
+        return web.json_response({"success": True, "message": "Đăng ký tài khoản thành công.", "user": user})
     except sqlite3.IntegrityError:
-        return web.json_response({"success": False, "message": "Email này đã được đăng ký!"})
+        return web.json_response({"success": False, "message": "Địa chỉ email này đã được đăng ký trước đó."})
     finally:
         conn.close()
 
@@ -128,17 +120,17 @@ async def api_portal_login(request):
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, email, name, avatar FROM users WHERE email = ? AND password_hash = ?", (email, _hash_pw(password)))
+    c.execute("SELECT id, email, name FROM users WHERE email = ? AND password_hash = ?", (email, _hash_pw(password)))
     row = c.fetchone()
     conn.close()
 
     if row:
-        user = {"user_id": row[0], "email": row[1], "name": row[2], "avatar": row[3]}
+        user = {"user_id": row[0], "email": row[1], "name": row[2]}
         return web.json_response({"success": True, "user": user})
-    return web.json_response({"success": False, "message": "Sai email hoặc mật khẩu!"})
+    return web.json_response({"success": False, "message": "Thông tin email hoặc mật khẩu không chính xác."})
 
 
-# ── REST API QUẢN LÝ AGENT (Trợ lý AI - nhân vật) ──────────
+# ── REST API QUẢN LÝ AGENT ─────────────────────────────────────────
 
 async def api_portal_get_agents(request):
     user_id = request.query.get("user_id")
@@ -147,10 +139,9 @@ async def api_portal_get_agents(request):
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, name, avatar, model, api_key, voice, prompt FROM agents WHERE user_id = ? ORDER BY created_at ASC", (user_id,))
+    c.execute("SELECT id, name, model, api_key, voice, prompt FROM agents WHERE user_id = ? ORDER BY created_at ASC", (user_id,))
     rows = c.fetchall()
-    
-    # Đếm số thiết bị đang gắn với mỗi agent
+
     agents = []
     for r in rows:
         ag_id = r[0]
@@ -159,11 +150,10 @@ async def api_portal_get_agents(request):
         agents.append({
             "id": ag_id,
             "name": r[1],
-            "avatar": r[2] or "🤖",
-            "model": r[3],
-            "api_key": r[4],
-            "voice": r[5],
-            "prompt": r[6],
+            "model": r[2],
+            "api_key": r[3],
+            "voice": r[4],
+            "prompt": r[5],
             "device_count": dev_count
         })
     conn.close()
@@ -171,27 +161,25 @@ async def api_portal_get_agents(request):
 
 
 async def api_portal_save_agent(request):
-    """Tạo mới hoặc cập nhật thông tin Agent."""
     data = await request.json()
     user_id = data.get("user_id")
     agent_id = data.get("id") or f"ag_{uuid.uuid4().hex[:10]}"
     name = data.get("name", "Trợ Lý Mới").strip()
-    avatar = data.get("avatar", "🤖").strip()
-    model = data.get("model", "deepseek/deepseek-chat")
+    model = data.get("model", "deepseek-chat").strip()
     api_key = data.get("api_key", "").strip()
     voice = data.get("voice", "vi-VN-HoaiMyNeural")
-    prompt = data.get("prompt", "Bạn là trợ lý AI thông minh.")
+    prompt = data.get("prompt", "Bạn là trợ lý AI thông minh.").strip()
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
-    INSERT OR REPLACE INTO agents (id, user_id, name, avatar, model, api_key, voice, prompt)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-    """, (agent_id, user_id, name, avatar, model, api_key, voice, prompt))
+    INSERT OR REPLACE INTO agents (id, user_id, name, model, api_key, voice, prompt)
+    VALUES (?, ?, ?, ?, ?, ?, ?)
+    """, (agent_id, user_id, name, model, api_key, voice, prompt))
     conn.commit()
     conn.close()
 
-    return web.json_response({"success": True, "message": f"Đã lưu Agent '{name}' thành công!"})
+    return web.json_response({"success": True, "message": f"Đã lưu Trợ lý '{name}' thành công."})
 
 
 async def api_portal_delete_agent(request):
@@ -202,14 +190,13 @@ async def api_portal_delete_agent(request):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("DELETE FROM agents WHERE id = ? AND user_id = ?", (agent_id, user_id))
-    # Gỡ agent khỏi các thiết bị
     c.execute("UPDATE devices SET agent_id = NULL WHERE agent_id = ?", (agent_id,))
     conn.commit()
     conn.close()
-    return web.json_response({"success": True, "message": "Đã xóa Agent thành công!"})
+    return web.json_response({"success": True, "message": "Đã xóa Trợ lý thành công."})
 
 
-# ── REST API QUẢN LÝ THIẾT BỊ (Ghép đôi 6 số & Gán Agent) ──
+# ── REST API QUẢN LÝ THIẾT BỊ ──────────────────────────────────────
 
 async def api_portal_get_devices(request):
     user_id = request.query.get("user_id")
@@ -219,7 +206,7 @@ async def api_portal_get_devices(request):
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
     c.execute("""
-    SELECT d.device_id, d.name, d.pairing_code, d.status, d.agent_id, a.name as agent_name, a.avatar as agent_avatar
+    SELECT d.device_id, d.name, d.pairing_code, d.agent_id, a.name as agent_name
     FROM devices d
     LEFT JOIN agents a ON d.agent_id = a.id
     WHERE d.user_id = ?
@@ -230,14 +217,16 @@ async def api_portal_get_devices(request):
 
     devices = []
     for r in rows:
+        dev_id = r[0]
+        # Trạng thái online được lấy trực tiếp từ bảng active sessions thực tế
+        is_online = dev_id in ACTIVE_CONNECTIONS
         devices.append({
-            "device_id": r[0],
+            "device_id": dev_id,
             "name": r[1],
             "pairing_code": r[2],
-            "status": r[3],
-            "agent_id": r[4] or "",
-            "agent_name": r[5] or "Chưa gán Agent",
-            "agent_avatar": r[6] or "❓",
+            "agent_id": r[3] or "",
+            "agent_name": r[4] or "Chưa gán Trợ lý",
+            "status": "online" if is_online else "offline"
         })
     return web.json_response({"success": True, "devices": devices})
 
@@ -246,13 +235,13 @@ async def api_portal_bind_device(request):
     data = await request.json()
     user_id = data.get("user_id")
     code = data.get("pairing_code", "").strip()
-    name = data.get("bot_name", "Xiaozhi S3").strip()
+    name = data.get("bot_name", "Thiết Bị ESP32").strip()
     agent_id = data.get("agent_id", "")
 
     if not user_id:
-        return web.json_response({"success": False, "message": "Vui lòng đăng nhập trước!"})
+        return web.json_response({"success": False, "message": "Vui lòng đăng nhập trước khi thực hiện."})
     if len(code) != 6 or not code.isdigit():
-        return web.json_response({"success": False, "message": "Mã PIN phải đúng 6 chữ số trên màn hình mạch!"})
+        return web.json_response({"success": False, "message": "Mã PIN phải đúng 6 chữ số hiển thị trên màn hình mạch."})
 
     device_id = f"ESP32-{code}"
     conn = sqlite3.connect(DB_PATH)
@@ -261,13 +250,13 @@ async def api_portal_bind_device(request):
     c.execute("SELECT user_id FROM devices WHERE device_id = ?", (device_id,))
     if c.fetchone():
         conn.close()
-        return web.json_response({"success": False, "message": f"Mạch có mã '{code}' đã được thêm trước đó!"})
+        return web.json_response({"success": False, "message": f"Mạch với mã PIN '{code}' đã được ghép đôi trong hệ thống."})
 
-    # Nếu chưa chỉ định agent_id thì gán cho agent đầu tiên của user
     if not agent_id:
         c.execute("SELECT id FROM agents WHERE user_id = ? LIMIT 1", (user_id,))
         first_ag = c.fetchone()
-        if first_ag: agent_id = first_ag[0]
+        if first_ag:
+            agent_id = first_ag[0]
 
     c.execute("""
     INSERT INTO devices (device_id, user_id, agent_id, name, pairing_code, status)
@@ -276,11 +265,10 @@ async def api_portal_bind_device(request):
     conn.commit()
     conn.close()
 
-    return web.json_response({"success": True, "message": f"Đã ghép đôi mạch '{name}' thành công!"})
+    return web.json_response({"success": True, "message": f"Đã ghép đôi thiết bị '{name}' thành công."})
 
 
 async def api_portal_assign_agent(request):
-    """Gán mạch Xiaozhi vào 1 Agent cụ thể."""
     data = await request.json()
     user_id = data.get("user_id")
     device_id = data.get("device_id")
@@ -291,7 +279,7 @@ async def api_portal_assign_agent(request):
     c.execute("UPDATE devices SET agent_id = ? WHERE device_id = ? AND user_id = ?", (agent_id, device_id, user_id))
     conn.commit()
     conn.close()
-    return web.json_response({"success": True, "message": "Đã đổi Agent cho mạch thành công!"})
+    return web.json_response({"success": True, "message": "Đã cập nhật Trợ lý điều khiển cho thiết bị."})
 
 
 async def api_portal_delete_device(request):
@@ -304,229 +292,257 @@ async def api_portal_delete_device(request):
     c.execute("DELETE FROM devices WHERE device_id = ? AND user_id = ?", (device_id, user_id))
     conn.commit()
     conn.close()
-    return web.json_response({"success": True, "message": "Đã hủy ghép đôi mạch khỏi tài khoản!"})
+    return web.json_response({"success": True, "message": "Đã hủy ghép đôi thiết bị."})
 
 
-# ── GIAO DIỆN WEB SERVER (HTML/CSS/JS CHUẨN XIAOZHI.ME) ─────
+# ── GIAO DIỆN WEB PORTAL (TECHNICAL & PROFESSIONAL CONSOLE) ────────
 
 HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
 <html lang="vi">
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ni-Oh Web Server — Quản Lý Agent & Thiết Bị (xiaozhi.me)</title>
+    <title>Ni-Oh Voice Portal — Bảng Quản Trị Thiết Bị & Trợ Lý AI</title>
     <style>
         :root {
-            --primary: #2563eb; --primary-hover: #1d4ed8; --bg: #f8fafc;
-            --panel: #ffffff; --text: #0f172a; --muted: #64748b; --border: #e2e8f0;
-            --success: #16a34a; --danger: #ef4444;
+            --bg: #090d16;
+            --panel: #111827;
+            --panel-border: #1f293d;
+            --text-main: #f1f5f9;
+            --text-muted: #94a3b8;
+            --accent: #3b82f6;
+            --accent-hover: #2563eb;
+            --success: #10b981;
+            --danger: #ef4444;
+            --mono: "JetBrains Mono", "SF Mono", Consolas, Menlo, monospace;
         }
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background: var(--bg); color: var(--text); min-height: 100vh; padding-bottom: 60px; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+        body { background: var(--bg); color: var(--text-main); min-height: 100vh; padding-bottom: 60px; }
         
-        .navbar { background: var(--panel); border-bottom: 1px solid var(--border); padding: 14px 28px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; box-shadow: 0 1px 2px rgba(0,0,0,0.03); }
-        .brand { font-size: 20px; font-weight: 800; color: var(--primary); display: flex; align-items: center; gap: 8px; }
-        .container { max-width: 1000px; margin: 30px auto; padding: 0 16px; }
+        .navbar { background: var(--panel); border-bottom: 1px solid var(--panel-border); padding: 14px 28px; display: flex; justify-content: space-between; align-items: center; position: sticky; top: 0; z-index: 100; }
+        .brand-title { font-size: 18px; font-weight: 700; letter-spacing: -0.5px; }
+        .brand-subtitle { font-size: 12px; color: var(--text-muted); }
+
+        .container { max-width: 1050px; margin: 28px auto; padding: 0 16px; }
 
         /* Auth Card */
-        .auth-card { background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 36px; max-width: 440px; margin: 40px auto; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.05); }
-        .auth-title { font-size: 22px; font-weight: 800; margin-bottom: 8px; text-align: center; }
-        .auth-desc { font-size: 13px; color: var(--muted); text-align: center; margin-bottom: 24px; }
-        .auth-tab { display: flex; border-bottom: 2px solid var(--border); margin-bottom: 20px; }
-        .auth-tab button { flex: 1; padding: 10px; background: none; border: none; font-weight: 700; cursor: pointer; color: var(--muted); font-size: 14px; }
-        .auth-tab button.active { color: var(--primary); border-bottom: 2px solid var(--primary); margin-bottom: -2px; }
+        .auth-card { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px; padding: 32px; max-width: 420px; margin: 60px auto; }
+        .auth-title { font-size: 20px; font-weight: 700; margin-bottom: 6px; text-align: center; }
+        .auth-desc { font-size: 13px; color: var(--text-muted); text-align: center; margin-bottom: 24px; }
+        .auth-tab { display: flex; border-bottom: 1px solid var(--panel-border); margin-bottom: 20px; }
+        .auth-tab button { flex: 1; padding: 10px; background: none; border: none; font-weight: 600; cursor: pointer; color: var(--text-muted); font-size: 13px; }
+        .auth-tab button.active { color: var(--accent); border-bottom: 2px solid var(--accent); margin-bottom: -1px; }
 
-        .input-group { margin-bottom: 14px; }
-        label { display: block; font-size: 13px; font-weight: 600; color: #475569; margin-bottom: 6px; }
-        input, select, textarea { width: 100%; padding: 10px 14px; border: 1px solid var(--border); border-radius: 8px; font-size: 14px; outline: none; }
-        input:focus, select:focus, textarea:focus { border-color: var(--primary); }
-        
-        .btn { width: 100%; padding: 11px; background: var(--primary); color: white; border: none; border-radius: 8px; font-weight: 700; cursor: pointer; font-size: 14px; transition: 0.2s; }
-        .btn:hover { background: var(--primary-hover); }
-        .btn-sm { width: auto; padding: 8px 16px; font-size: 13px; }
-        .btn-secondary { background: #f1f5f9; color: #334155; }
-        .btn-secondary:hover { background: #e2e8f0; }
+        .form-group { margin-bottom: 14px; }
+        label { display: block; font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; color: var(--text-muted); margin-bottom: 6px; }
+        input[type="text"], input[type="password"], select, textarea {
+            width: 100%; padding: 10px 12px; background: #0b1120; border: 1px solid var(--panel-border); border-radius: 8px; color: var(--text-main); font-size: 13px; outline: none; transition: border-color 0.15s;
+        }
+        input:focus, select:focus, textarea:focus { border-color: var(--accent); }
+        .mono-input { font-family: var(--mono); font-size: 12px; }
 
-        /* Dashboard Tabs (Agents vs Devices) */
-        .nav-tabs { display: flex; gap: 10px; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }
-        .nav-tab-btn { background: none; border: none; font-size: 16px; font-weight: 700; padding: 8px 16px; border-radius: 8px; cursor: pointer; color: var(--muted); }
-        .nav-tab-btn.active { background: #eff6ff; color: var(--primary); }
+        .btn { padding: 10px 18px; border-radius: 8px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid transparent; transition: 0.15s; }
+        .btn-primary { background: var(--accent); color: white; width: 100%; }
+        .btn-primary:hover { background: var(--accent-hover); }
+        .btn-secondary { background: #1f293d; color: var(--text-main); }
+        .btn-secondary:hover { background: #2d3b55; }
+        .btn-danger { background: rgba(239, 68, 68, 0.15); color: var(--danger); border: 1px solid rgba(239, 68, 68, 0.3); }
+        .btn-danger:hover { background: rgba(239, 68, 68, 0.25); }
+        .btn-sm { padding: 6px 12px; font-size: 12px; }
 
-        /* Grid */
-        .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 20px; }
-        .card { background: var(--panel); border: 1px solid var(--border); border-radius: 14px; padding: 22px; cursor: pointer; transition: 0.2s; position: relative; }
-        .card:hover { border-color: var(--primary); transform: translateY(-2px); box-shadow: 0 10px 15px -3px rgba(0,0,0,0.05); }
+        /* Tabs */
+        .portal-nav { display: flex; gap: 8px; border-bottom: 1px solid var(--panel-border); margin-bottom: 24px; }
+        .portal-nav button { padding: 12px 18px; background: none; border: none; font-weight: 600; cursor: pointer; color: var(--text-muted); font-size: 14px; }
+        .portal-nav button.active { color: var(--accent); border-bottom: 2px solid var(--accent); margin-bottom: -1px; }
 
-        .status-dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 6px; }
-        .dot-online { background: var(--success); box-shadow: 0 0 6px rgba(34,197,94,0.6); }
-        .dot-offline { background: var(--muted); }
+        /* Card / Table */
+        .card { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px; padding: 22px; margin-bottom: 20px; }
+        .card-title { font-size: 16px; font-weight: 600; display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; }
+
+        table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        th { text-align: left; padding: 10px 12px; font-size: 11px; text-transform: uppercase; color: var(--text-muted); border-bottom: 1px solid var(--panel-border); }
+        td { padding: 12px; border-bottom: 1px solid var(--panel-border); }
+
+        .status-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
+        .status-dot.online { background: #10b981; }
+        .status-dot.offline { background: #64748b; }
+
+        .agent-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(310px, 1fr)); gap: 16px; }
+        .agent-card { background: #0b1120; border: 1px solid var(--panel-border); border-radius: 10px; padding: 18px; display: flex; flex-direction: column; justify-content: space-between; }
+        .agent-name { font-size: 15px; font-weight: 600; margin-bottom: 4px; }
+        .agent-meta { font-size: 12px; color: var(--text-muted); font-family: var(--mono); margin-bottom: 10px; }
+        .agent-prompt { font-size: 12px; color: var(--text-main); line-height: 1.4; margin-bottom: 14px; flex-grow: 1; background: #070a12; padding: 8px 10px; border-radius: 6px; }
 
         /* Modal */
-        .modal-overlay { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 200; backdrop-filter: blur(2px); }
-        .modal { background: var(--panel); border-radius: 16px; width: 100%; max-width: 520px; padding: 28px; }
-
-        .endpoint-box { background: #f0fdf4; border: 1px solid #bbf7d0; border-radius: 10px; padding: 16px; margin-top: 24px; font-size: 13px; line-height: 1.6; }
-        .code-tag { background: white; border: 1px solid #cbd5e1; padding: 4px 8px; border-radius: 6px; font-family: monospace; font-size: 12px; color: #0369a1; }
+        .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 200; justify-content: center; align-items: center; }
+        .modal-content { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px; padding: 24px; width: 480px; max-width: 90%; }
+        .modal-header { font-size: 16px; font-weight: 600; margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
     </style>
 </head>
 <body>
     <div class="navbar">
-        <div class="brand">
-            <span>⚡ Ni-Oh Web Server</span>
-            <span style="font-size: 12px; background: #eff6ff; color: var(--primary); padding: 4px 8px; border-radius: 6px; font-weight: 700;">xiaozhi.me clone</span>
+        <div>
+            <div class="brand-title">Ni-Oh Voice Portal</div>
+            <div class="brand-subtitle">Bảng Quản Trị Thiết Bị & Trợ Lý AI</div>
         </div>
-        <div id="userNavbar" style="display: flex; align-items: center; gap: 12px;">
-            <span style="font-size: 13px; color: var(--muted);">Chưa đăng nhập</span>
-        </div>
-    </div>
-
-    <div class="container">
-        <!-- 1. MÀN HÌNH ĐĂNG NHẬP / ĐĂNG KÝ -->
-        <div id="authScreen" class="auth-card">
-            <div class="auth-title">Quản Lý Agent & Thiết Bị</div>
-            <div class="auth-desc">Đăng nhập tài khoản để thiết lập các nhân vật AI và gán mạch Xiaozhi</div>
-
-            <div class="auth-tab">
-                <button id="tabLogin" class="active" onclick="switchTab('login')">Đăng Nhập</button>
-                <button id="tabRegister" onclick="switchTab('register')">Đăng Ký Mới</button>
-            </div>
-
-            <form id="authForm" onsubmit="handleAuthSubmit(event)">
-                <div class="input-group" id="nameGroup" style="display: none;">
-                    <label>Họ và tên của bạn</label>
-                    <input type="text" id="authName" placeholder="Nguyễn Văn A">
-                </div>
-                <div class="input-group">
-                    <label>Email cá nhân</label>
-                    <input type="email" id="authEmail" required placeholder="user@gmail.com">
-                </div>
-                <div class="input-group">
-                    <label>Mật khẩu</label>
-                    <input type="password" id="authPassword" required placeholder="••••••••">
-                </div>
-                <button type="submit" class="btn" id="submitBtn">Đăng Nhập Ngay</button>
-            </form>
-        </div>
-
-        <!-- 2. MÀN HÌNH CHÍNH (Sau khi đăng nhập) -->
-        <div id="dashboardScreen" style="display: none;">
-            <!-- Menu chuyển giữa AGENTS và THIẾT BỊ -->
-            <div class="nav-tabs">
-                <button class="nav-tab-btn active" id="btnTabAgents" onclick="switchMainTab('agents')">🤖 1. Agent Của Tôi</button>
-                <button class="nav-tab-btn" id="btnTabDevices" onclick="switchMainTab('devices')">📱 2. Mạch Xiaozhi Đã Ghép Đôi</button>
-                <button class="nav-tab-btn" id="btnTabGuide" onclick="switchMainTab('guide')">📡 3. Cấu Hình Firmware</button>
-            </div>
-
-            <!-- TAB 1: DANH SÁCH AGENT -->
-            <div id="sectionAgents">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <div>
-                        <h2 style="font-size: 20px; font-weight: 800;">Danh Sách Trợ Lý AI (Agents)</h2>
-                        <span style="font-size: 13px; color: var(--muted);">Tạo các tính cách, model AI và giọng đọc khác nhau để gán vào từng mạch Xiaozhi</span>
-                    </div>
-                    <button class="btn btn-sm" onclick="openAgentModal()">+ Tạo Agent Mới</button>
-                </div>
-                <div class="grid" id="agentGrid"></div>
-            </div>
-
-            <!-- TAB 2: DANH SÁCH THIẾT BỊ -->
-            <div id="sectionDevices" style="display: none;">
-                <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
-                    <div>
-                        <h2 style="font-size: 20px; font-weight: 800;">Mạch Xiaozhi Của Tôi</h2>
-                        <span style="font-size: 13px; color: var(--muted);">Ghép đôi bằng mã 6 số từ màn hình và chọn Agent tương ứng để robot nói chuyện</span>
-                    </div>
-                    <button class="btn btn-sm" onclick="openBindModal()">+ Ghép Đôi Mạch Mới</button>
-                </div>
-                <div class="grid" id="deviceGrid"></div>
-            </div>
-
-            <!-- TAB 3: HƯỚNG DẪN KẾT NỐI -->
-            <div id="sectionGuide" style="display: none;">
-                <div class="endpoint-box">
-                    <strong style="font-size: 15px;">📡 Thông Số Kết Nối Server Dành Cho Firmware ESP32:</strong><br>
-                    <p style="margin: 8px 0; color: var(--muted);">
-                        Để mạch Xiaozhi của bạn kết nối về server này và nhận lệnh từ các Agent ở trên, hãy cấu hình endpoint tương ứng vào firmware:
-                    </p>
-                    <div style="margin-top: 10px;">
-                        • <strong>WebSocket Audio Server (WSS):</strong> <span class="code-tag" id="liveWssTag">wss://.../xiaozhi/v1/</span><br>
-                        • <strong>OTA Firmware Server:</strong> <span class="code-tag" id="liveOtaTag">https://.../xiaozhi/ota/</span>
-                    </div>
-                </div>
-            </div>
+        <div id="userProfile" style="display: none; align-items: center; gap: 14px;">
+            <span id="userNameDisplay" style="font-size: 13px; font-weight: 600;"></span>
+            <button class="btn btn-secondary btn-sm" onclick="logoutUser()">Đăng Xuất</button>
         </div>
     </div>
 
-    <!-- MODAL: TẠO / SỬA AGENT -->
-    <div class="modal-overlay" id="agentModal">
-        <div class="modal">
-            <h3 style="font-size: 18px; margin-bottom: 16px;" id="agentModalTitle">🤖 Tạo Trợ Lý AI Mới</h3>
-            
-            <div class="input-group">
-                <label>Tên Agent (ví dụ: Gia Sư Tiếng Anh, Bạn Tâm Sự...)</label>
-                <input type="text" id="agNameInput" placeholder="Trợ Lý Thông Minh">
-            </div>
+    <!-- KHỐI ĐĂNG NHẬP / ĐĂNG KÝ -->
+    <div id="authSection" class="auth-card">
+        <div class="auth-title">Đăng Nhập Quản Trị</div>
+        <div class="auth-desc">Truy cập bảng điều khiển thiết bị Xiaozhi của bạn</div>
 
-            <div class="input-group">
-                <label>Mô Hình AI (Model):</label>
-                <select id="agModelSelect">
-                    <option value="deepseek/deepseek-chat">⭐ DeepSeek V3 (Nhanh, Tiếng Việt chuẩn xác)</option>
-                    <option value="google/gemini-2.0-flash:free">🎁 Google Gemini 2.0 Flash (FREE 100%, Siêu tốc)</option>
-                    <option value="openai/gpt-4o-mini">⚡ GPT-4o Mini (Phản hồi tức thì)</option>
-                    <option value="anthropic/claude-3.5-sonnet">👑 Claude 3.5 Sonnet (Thông minh nhất)</option>
-                    <option value="meta-llama/llama-3.3-70b-instruct">🧠 Llama 3.3 70B</option>
-                    <option value="deepseek/deepseek-r1">🔬 DeepSeek R1 (Lý luận sâu)</option>
-                </select>
-            </div>
+        <div class="auth-tab">
+            <button id="tabBtnLogin" class="active" onclick="switchAuthTab('login')">Đăng Nhập</button>
+            <button id="tabBtnRegister" onclick="switchAuthTab('register')">Đăng Ký</button>
+        </div>
 
-            <div class="input-group">
-                <label>Giọng Đọc Tiếng Việt (TTS Neural):</label>
+        <div class="form-group">
+            <label>Địa Chỉ Email:</label>
+            <input type="text" id="authEmail" class="mono-input" placeholder="name@example.com">
+        </div>
+        <div class="form-group">
+            <label>Mật Khẩu:</label>
+            <input type="password" id="authPassword" placeholder="••••••••">
+        </div>
+        <div class="form-group" id="nameGroup" style="display: none;">
+            <label>Họ Và Tên:</label>
+            <input type="text" id="authName" placeholder="Tên hiển thị">
+        </div>
+
+        <button id="authSubmitBtn" class="btn btn-primary" onclick="submitAuth()">Đăng Nhập</button>
+    </div>
+
+    <!-- KHỐI QUẢN TRỊ CHÍNH (SAU KHI ĐĂNG NHẬP) -->
+    <div id="portalSection" class="container" style="display: none;">
+        <div class="portal-nav">
+            <button id="navAgents" class="active" onclick="switchPortalTab('agents')">Trợ Lý AI (Agents)</button>
+            <button id="navDevices" onclick="switchPortalTab('devices')">Thiết Bị Đã Ghép Đôi</button>
+            <button id="navFirmware" onclick="switchPortalTab('firmware')">Cấu Hình Firmware</button>
+        </div>
+
+        <!-- TAB 1: QUẢN LÝ AGENT -->
+        <div id="tabAgents">
+            <div class="card">
+                <div class="card-title">
+                    <span>Danh Sách Trợ Lý AI</span>
+                    <button class="btn btn-primary btn-sm" style="width: auto;" onclick="openAgentModal()">+ Thêm Trợ Lý Mới</button>
+                </div>
+                <div id="agentsGrid" class="agent-grid">
+                    <!-- Render dynamically -->
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 2: QUẢN LÝ THIẾT BỊ -->
+        <div id="tabDevices" style="display: none;">
+            <div class="card">
+                <div class="card-title">
+                    <span>Mạch ESP32 Đã Ghép Đôi</span>
+                    <button class="btn btn-primary btn-sm" style="width: auto;" onclick="openBindModal()">+ Ghép Đôi Bằng Mã PIN 6 Số</button>
+                </div>
+                <div id="devicesTableContainer">
+                    <!-- Render dynamically -->
+                </div>
+            </div>
+        </div>
+
+        <!-- TAB 3: CẤU HÌNH FIRMWARE -->
+        <div id="tabFirmware" style="display: none;">
+            <div class="card">
+                <div class="card-title">Thông Số Kết Nối Cho Firmware ESP32</div>
+                <p style="font-size: 13px; color: var(--text-muted); line-height: 1.6; margin-bottom: 16px;">
+                    Cấu hình các tham số bên dưới vào tập tin <code>config.json</code> hoặc phân vùng NVS của mạch Xiaozhi ESP32 để trỏ kết nối trực tiếp về máy chủ này:
+                </p>
+
+                <div class="form-group">
+                    <label>Địa Chỉ WebSocket Voice Endpoint:</label>
+                    <input type="text" id="fwWssUrl" class="mono-input" readonly>
+                </div>
+
+                <div class="form-group">
+                    <label>Địa Chỉ Cập Nhật OTA Endpoint:</label>
+                    <input type="text" id="fwOtaUrl" class="mono-input" readonly>
+                </div>
+
+                <div class="form-group">
+                    <label>Cấu Trúc JSON Cấu Hình Firmware Mẫu:</label>
+                    <textarea id="fwJsonConfig" class="mono-input" rows="6" readonly style="resize: none;"></textarea>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MODAL THÊM / SỬA AGENT -->
+    <div id="agentModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span id="agentModalTitle">Cấu Hình Trợ Lý AI</span>
+                <span style="cursor: pointer; color: var(--text-muted);" onclick="closeAgentModal()">✕</span>
+            </div>
+            <div class="form-group">
+                <label>Tên Trợ Lý:</label>
+                <input type="text" id="agNameInput" placeholder="Ví dụ: Trợ Lý Bàn Làm Việc">
+            </div>
+            <div class="form-group">
+                <label>Mô Hình Ngôn Ngữ (Model ID):</label>
+                <input type="text" id="agModelSelect" class="mono-input" placeholder="deepseek-chat" list="portalModelPresets">
+                <datalist id="portalModelPresets">
+                    <option value="deepseek-chat">
+                    <option value="deepseek-reasoner">
+                    <option value="gpt-4o-mini">
+                    <option value="gpt-4o">
+                    <option value="gemini-2.0-flash">
+                    <option value="qwen-plus">
+                    <option value="claude-3-5-sonnet-20241022">
+                    <option value="llama3.2">
+                </datalist>
+            </div>
+            <div class="form-group">
+                <label>Giọng Đọc (Edge-TTS Neural):</label>
                 <select id="agVoiceSelect">
-                    <option value="vi-VN-HoaiMyNeural">Hoài My (Nữ miền Bắc - Trong trẻo, tự nhiên)</option>
-                    <option value="vi-VN-NamMinhNeural">Nam Minh (Nam miền Bắc - Trầm ấm, truyền cảm)</option>
+                    <option value="vi-VN-HoaiMyNeural">Hoài My (Tiếng Việt - Nữ)</option>
+                    <option value="vi-VN-NamMinhNeural">Nam Minh (Tiếng Việt - Nam)</option>
+                    <option value="en-US-JennyNeural">Jenny (English - Female)</option>
+                    <option value="zh-CN-XiaoxiaoNeural">Xiaoxiao (Chinese - Female)</option>
                 </select>
             </div>
-
-            <div class="input-group">
-                <label>API Key Riêng Của Bạn (Tùy chọn - Bỏ trống để dùng key mặc định của Server):</label>
-                <input type="password" id="agApiKeyInput" placeholder="sk-xxxx">
+            <div class="form-group">
+                <label>API Key Riêng (Tùy chọn - Bỏ trống để dùng chung key máy chủ):</label>
+                <input type="password" id="agApiKeyInput" class="mono-input" placeholder="sk-...">
             </div>
-
-            <div class="input-group">
-                <label>Tính Cách Nhân Vật / System Prompt:</label>
-                <textarea id="agPromptInput" rows="3" placeholder="Bạn là một trợ lý vui tính..."></textarea>
+            <div class="form-group">
+                <label>Câu Lệnh Nhân Cách (System Prompt):</label>
+                <textarea id="agPromptInput" rows="3" placeholder="Định nghĩa vai trò và cách ứng xử của Trợ lý AI..."></textarea>
             </div>
-
-            <div style="display: flex; gap: 10px; margin-top: 20px;">
-                <button class="btn" onclick="submitSaveAgent()">Lưu Agent</button>
-                <button class="btn btn-secondary" style="width: auto;" onclick="closeAgentModal()">Đóng</button>
-            </div>
+            <button class="btn btn-primary" onclick="submitSaveAgent()">Lưu Trợ Lý</button>
         </div>
     </div>
 
-    <!-- MODAL: GHÉP ĐÔI MẠCH MỚI QUA MÃ 6 SỐ -->
-    <div class="modal-overlay" id="bindModal">
-        <div class="modal">
-            <h3 style="font-size: 18px; margin-bottom: 10px;">🔗 Ghép Đôi Mạch Xiaozhi Mới</h3>
-            <p style="color: var(--muted); font-size: 13px; margin-bottom: 18px;">
-                Bật nguồn mạch ESP32, màn hình LCD sẽ hiện <strong>mã 6 chữ số</strong>. Hãy nhập mã đó vào đây:
-            </p>
-            <div class="input-group">
-                <label>Mã 6 Số trên màn hình mạch:</label>
-                <input type="text" id="pinInput" maxlength="6" style="font-size: 26px; font-weight: 800; text-align: center; letter-spacing: 8px;" placeholder="123456">
+    <!-- MODAL GHÉP ĐÔI THIẾT BỊ 6 SỐ -->
+    <div id="bindModal" class="modal">
+        <div class="modal-content">
+            <div class="modal-header">
+                <span>Ghép Đôi Mạch ESP32</span>
+                <span style="cursor: pointer; color: var(--text-muted);" onclick="closeBindModal()">✕</span>
             </div>
-            <div class="input-group">
-                <label>Đặt tên cho mạch robot này:</label>
-                <input type="text" id="botNameInput" value="Robot Xiaozhi S3">
+            <div class="form-group">
+                <label>Mã PIN 6 Số (Hiển thị trên màn hình mạch):</label>
+                <input type="text" id="pinInput" class="mono-input" maxlength="6" placeholder="Ví dụ: 123456" style="font-size: 18px; letter-spacing: 4px; text-align: center;">
             </div>
-            <div class="input-group">
-                <label>Gán Agent điều khiển mạch:</label>
+            <div class="form-group">
+                <label>Tên Gợi Nhớ Cho Thiết Bị:</label>
+                <input type="text" id="botNameInput" placeholder="Ví dụ: Robot Bàn Học">
+            </div>
+            <div class="form-group">
+                <label>Gán Vào Trợ Lý AI:</label>
                 <select id="bindAgentSelect"></select>
             </div>
-            <div style="display: flex; gap: 10px; margin-top: 22px;">
-                <button class="btn" onclick="submitBindDevice()">Ghép Đôi Mạch</button>
-                <button class="btn btn-secondary" style="width: auto;" onclick="closeBindModal()">Hủy</button>
-            </div>
+            <button class="btn btn-primary" onclick="submitBindDevice()">Xác Nhận Ghép Đôi</button>
         </div>
     </div>
 
@@ -537,70 +553,72 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         let userDevices = [];
         let editingAgentId = null;
 
-        function updateEndpointsDisplay() {
-            const loc = window.location;
-            const wssProto = (loc.protocol === 'https:') ? 'wss:' : 'ws:';
-            document.getElementById('liveWssTag').innerText = `${wssProto}//${loc.host}/xiaozhi/v1/`;
-            document.getElementById('liveOtaTag').innerText = `${loc.protocol}//${loc.host}/xiaozhi/ota/`;
-        }
-
-        function switchTab(mode) {
+        function switchAuthTab(mode) {
             currentAuthMode = mode;
-            document.getElementById('tabLogin').className = (mode === 'login') ? 'active' : '';
-            document.getElementById('tabRegister').className = (mode === 'register') ? 'active' : '';
-            document.getElementById('nameGroup').style.display = (mode === 'register') ? 'block' : 'none';
-            document.getElementById('submitBtn').innerText = (mode === 'login') ? 'Đăng Nhập Ngay' : 'Tạo Tài Khoản Mới';
+            document.getElementById('tabBtnLogin').className = mode === 'login' ? 'active' : '';
+            document.getElementById('tabBtnRegister').className = mode === 'register' ? 'active' : '';
+            document.getElementById('nameGroup').style.display = mode === 'register' ? 'block' : 'none';
+            document.getElementById('authSubmitBtn').innerText = mode === 'login' ? 'Đăng Nhập' : 'Tạo Tài Khoản Mới';
         }
 
-        function switchMainTab(tab) {
-            document.querySelectorAll('.nav-tab-btn').forEach(b => b.classList.remove('active'));
-            document.getElementById('sectionAgents').style.display = (tab === 'agents') ? 'block' : 'none';
-            document.getElementById('sectionDevices').style.display = (tab === 'devices') ? 'block' : 'none';
-            document.getElementById('sectionGuide').style.display = (tab === 'guide') ? 'block' : 'none';
-            if (tab === 'agents') document.getElementById('btnTabAgents').classList.add('active');
-            if (tab === 'devices') document.getElementById('btnTabDevices').classList.add('active');
-            if (tab === 'guide') document.getElementById('btnTabGuide').classList.add('active');
-        }
+        async function submitAuth() {
+            const email = document.getElementById('authEmail').value.trim();
+            const password = document.getElementById('authPassword').value.trim();
+            const name = document.getElementById('authName').value.trim();
 
-        async function handleAuthSubmit(e) {
-            e.preventDefault();
-            const email = document.getElementById('authEmail').value;
-            const password = document.getElementById('authPassword').value;
-            const name = document.getElementById('authName').value;
+            if (!email || !password) {
+                alert("Vui lòng điền đầy đủ email và mật khẩu.");
+                return;
+            }
 
-            const endpoint = (currentAuthMode === 'login') ? '/api/portal/login' : '/api/portal/register';
-            const res = await fetch(endpoint, {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ email, password, name })
-            });
-            const data = await res.json();
-            if (data.success) {
-                onLoginSuccess(data.user);
-            } else {
-                alert(data.message);
+            const endpoint = currentAuthMode === 'login' ? '/api/portal/login' : '/api/portal/register';
+            const payload = { email, password, name };
+
+            try {
+                const res = await fetch(endpoint, {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify(payload)
+                });
+                const data = await res.json();
+                if (data.success) {
+                    onLoginSuccess(data.user);
+                } else {
+                    alert(data.message);
+                }
+            } catch (e) {
+                alert("Không thể kết nối máy chủ: " + e);
             }
         }
 
         function onLoginSuccess(user) {
             currentUser = user;
             sessionStorage.setItem('nioh_user', JSON.stringify(user));
-            document.getElementById('authScreen').style.display = 'none';
-            document.getElementById('dashboardScreen').style.display = 'block';
+            document.getElementById('authSection').style.display = 'none';
+            document.getElementById('portalSection').style.display = 'block';
+            document.getElementById('userProfile').style.display = 'flex';
+            document.getElementById('userNameDisplay').innerText = user.name || user.email;
 
-            document.getElementById('userNavbar').innerHTML = `
-                <img src="${user.avatar || 'https://ui-avatars.com/api/?name=' + encodeURIComponent(user.name)}" style="width: 32px; height: 32px; border-radius: 50%;">
-                <div style="font-size: 13px;"><strong>${user.name}</strong><br><small style="color: var(--muted);">${user.email}</small></div>
-                <button onclick="logout()" style="background: none; border: 1px solid var(--border); padding: 4px 10px; border-radius: 6px; cursor: pointer; font-size: 12px; margin-left: 8px;">Thoát</button>
-            `;
-            updateEndpointsDisplay();
             loadAllData();
+            loadFirmwareEndpoints();
         }
 
-        function logout() {
-            sessionStorage.removeItem('nioh_user');
+        function logoutUser() {
             currentUser = null;
-            location.reload();
+            sessionStorage.removeItem('nioh_user');
+            document.getElementById('portalSection').style.display = 'none';
+            document.getElementById('userProfile').style.display = 'none';
+            document.getElementById('authSection').style.display = 'block';
+        }
+
+        function switchPortalTab(tab) {
+            document.getElementById('tabAgents').style.display = tab === 'agents' ? 'block' : 'none';
+            document.getElementById('tabDevices').style.display = tab === 'devices' ? 'block' : 'none';
+            document.getElementById('tabFirmware').style.display = tab === 'firmware' ? 'block' : 'none';
+
+            document.getElementById('navAgents').className = tab === 'agents' ? 'active' : '';
+            document.getElementById('navDevices').className = tab === 'devices' ? 'active' : '';
+            document.getElementById('navFirmware').className = tab === 'firmware' ? 'active' : '';
         }
 
         async function loadAllData() {
@@ -613,110 +631,74 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             const res = await fetch(`/api/portal/agents?user_id=${currentUser.user_id}`);
             const data = await res.json();
             userAgents = data.agents || [];
-            
-            const grid = document.getElementById('agentGrid');
+            renderAgents();
+            updateAgentDropdowns();
+        }
+
+        function renderAgents() {
+            const container = document.getElementById('agentsGrid');
             if (userAgents.length === 0) {
-                grid.innerHTML = `<div style="grid-column: span 3; text-align: center; padding: 40px; color: var(--muted);">Chưa có Agent nào. Nhấp "+ Tạo Agent Mới" để bắt đầu.</div>`;
+                container.innerHTML = '<div style="color: var(--text-muted); font-size: 13px;">Chưa có Trợ lý nào. Nhấp "+ Thêm Trợ Lý Mới" để tạo.</div>';
                 return;
             }
-            grid.innerHTML = userAgents.map(a => `
-                <div class="card" onclick="editAgent('${a.id}')">
-                    <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 12px;">
-                        <span style="font-size: 28px;">${a.avatar}</span>
-                        <div>
-                            <strong style="font-size: 16px;">${a.name}</strong><br>
-                            <small style="color: var(--muted);">Model: ${a.model.split('/')[1] || a.model}</small>
+
+            container.innerHTML = userAgents.map(ag => `
+                <div class="agent-card">
+                    <div>
+                        <div class="agent-name">${ag.name}</div>
+                        <div class="agent-meta">Model: ${ag.model} | Giọng: ${ag.voice.replace('Neural','')}</div>
+                        <div class="agent-prompt">${ag.prompt || 'Không có mô tả nhân cách.'}</div>
+                    </div>
+                    <div style="display: flex; justify-content: space-between; align-items: center; border-top: 1px solid var(--panel-border); padding-top: 10px; margin-top: 6px;">
+                        <span style="font-size: 11px; color: var(--text-muted);">${ag.device_count} thiết bị đang gắn</span>
+                        <div style="display: flex; gap: 6px;">
+                            <button class="btn btn-secondary btn-sm" onclick="editAgent('${ag.id}')">Sửa</button>
+                            <button class="btn btn-danger btn-sm" onclick="deleteAgent('${ag.id}', '${ag.name}')">Xóa</button>
                         </div>
-                    </div>
-                    <div style="font-size: 13px; color: #475569; margin-bottom: 12px; line-height: 1.4; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden;">
-                        "${a.prompt || 'Chưa có prompt...'}"
-                    </div>
-                    <div style="font-size: 12px; background: #eff6ff; color: var(--primary); padding: 6px 10px; border-radius: 6px; display: flex; justify-content: space-between;">
-                        <span>📱 Mạch đang dùng: <strong>${a.device_count} thiết bị</strong></span>
-                        <span>Sửa ⚙️</span>
                     </div>
                 </div>
             `).join('');
-
-            // Cập nhật dropdown chọn agent trong modal ghép đôi
-            const sel = document.getElementById('bindAgentSelect');
-            sel.innerHTML = userAgents.map(a => `<option value="${a.id}">${a.avatar} ${a.name}</option>`).join('');
         }
 
-        async function loadDevices() {
-            const res = await fetch(`/api/portal/devices?user_id=${currentUser.user_id}`);
-            const data = await res.json();
-            userDevices = data.devices || [];
-
-            const grid = document.getElementById('deviceGrid');
-            if (userDevices.length === 0) {
-                grid.innerHTML = `<div style="grid-column: span 3; text-align: center; padding: 40px; color: var(--muted); border: 2px dashed var(--border); border-radius: 12px;">Bạn chưa ghép đôi mạch nào.<br>Bấm <strong>"+ Ghép Đôi Mạch Mới"</strong> và nhập mã 6 số từ màn hình mạch để gán Agent.</div>`;
-                return;
-            }
-            grid.innerHTML = userDevices.map(d => {
-                const isOnline = (d.status === 'online');
-                const dotClass = isOnline ? 'dot-online' : 'dot-offline';
-                const statusText = isOnline ? '🟢 Đang Online' : '⚪ Offline';
-                
-                // Tạo dropdown chọn Agent trực tiếp trên từng thiết bị
-                const agentOptions = userAgents.map(a => `
-                    <option value="${a.id}" ${a.id === d.agent_id ? 'selected' : ''}>${a.avatar} ${a.name}</option>
-                `).join('');
-
-                return `
-                <div class="card" style="cursor: default;">
-                    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px;">
-                        <strong style="font-size: 16px;">${d.name}</strong>
-                        <span style="font-size: 12px; font-weight: 700; color: ${isOnline ? 'var(--success)' : 'var(--muted)'};">
-                            <span class="status-dot ${dotClass}"></span>${statusText}
-                        </span>
-                    </div>
-                    <div style="font-size: 12px; color: var(--muted); margin-bottom: 14px;">Mã PIN: <strong>${d.pairing_code}</strong> | ID: ${d.device_id}</div>
-                    
-                    <div style="background: #f8fafc; padding: 10px; border-radius: 8px; border: 1px solid var(--border); margin-bottom: 12px;">
-                        <label style="font-size: 12px; color: var(--muted); margin-bottom: 4px;">Agent đang điều khiển mạch này:</label>
-                        <select onchange="changeDeviceAgent('${d.device_id}', this.value)" style="padding: 6px 10px; font-size: 13px; font-weight: 600;">
-                            ${agentOptions}
-                        </select>
-                    </div>
-
-                    <button class="btn btn-secondary" style="font-size: 12px; padding: 6px; color: #ef4444;" onclick="deleteDevice('${d.device_id}', '${d.name}')">Hủy Ghép Đôi</button>
-                </div>
-            `}).join('');
+        function updateAgentDropdowns() {
+            const sel = document.getElementById('bindAgentSelect');
+            sel.innerHTML = userAgents.map(ag => `<option value="${ag.id}">${ag.name}</option>`).join('');
         }
 
         function openAgentModal() {
             editingAgentId = null;
-            document.getElementById('agentModalTitle').innerText = '🤖 Tạo Trợ Lý AI Mới';
-            document.getElementById('agNameInput').value = 'Gia Sư AI';
-            document.getElementById('agModelSelect').value = 'deepseek/deepseek-chat';
-            document.getElementById('agVoiceSelect').value = 'vi-VN-HoaiMyNeural';
-            document.getElementById('agApiKeyInput').value = '';
-            document.getElementById('agPromptInput').value = 'Bạn là một gia sư thông thái, giải thích dễ hiểu và khích lệ người học.';
+            document.getElementById('agentModalTitle').innerText = "Thêm Trợ Lý AI Mới";
+            document.getElementById('agNameInput').value = "";
+            document.getElementById('agModelSelect').value = "deepseek-chat";
+            document.getElementById('agVoiceSelect').value = "vi-VN-HoaiMyNeural";
+            document.getElementById('agApiKeyInput').value = "";
+            document.getElementById('agPromptInput').value = "Bạn là trợ lý AI thông minh, hỗ trợ người dùng bằng tiếng Việt tự nhiên và súc tích.";
             document.getElementById('agentModal').style.display = 'flex';
         }
 
-        function editAgent(agentId) {
-            const ag = userAgents.find(a => a.id === agentId);
+        function editAgent(id) {
+            const ag = userAgents.find(a => a.id === id);
             if (!ag) return;
-            editingAgentId = ag.id;
-            document.getElementById('agentModalTitle').innerText = `⚙️ Sửa Agent: ${ag.name}`;
+            editingAgentId = id;
+            document.getElementById('agentModalTitle').innerText = `Chỉnh Sửa Trợ Lý: ${ag.name}`;
             document.getElementById('agNameInput').value = ag.name;
             document.getElementById('agModelSelect').value = ag.model;
             document.getElementById('agVoiceSelect').value = ag.voice;
-            document.getElementById('agApiKeyInput').value = ag.api_key || '';
-            document.getElementById('agPromptInput').value = ag.prompt || '';
+            document.getElementById('agApiKeyInput').value = ag.api_key || "";
+            document.getElementById('agPromptInput').value = ag.prompt || "";
             document.getElementById('agentModal').style.display = 'flex';
         }
 
-        function closeAgentModal() { document.getElementById('agentModal').style.display = 'none'; }
+        function closeAgentModal() {
+            document.getElementById('agentModal').style.display = 'none';
+        }
 
         async function submitSaveAgent() {
             const payload = {
                 user_id: currentUser.user_id,
                 id: editingAgentId,
                 name: document.getElementById('agNameInput').value.trim() || 'Trợ Lý AI',
-                model: document.getElementById('agModelSelect').value,
+                model: document.getElementById('agModelSelect').value.trim() || 'deepseek-chat',
                 voice: document.getElementById('agVoiceSelect').value,
                 api_key: document.getElementById('agApiKeyInput').value.trim(),
                 prompt: document.getElementById('agPromptInput').value.trim()
@@ -727,19 +709,92 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
                 body: JSON.stringify(payload)
             });
             const data = await res.json();
-            alert(data.message);
             closeAgentModal();
             loadAllData();
         }
 
-        function openBindModal() { document.getElementById('bindModal').style.display = 'flex'; }
-        function closeBindModal() { document.getElementById('bindModal').style.display = 'none'; }
+        async function deleteAgent(id, name) {
+            if (!confirm(`Bạn có chắc chắn muốn xóa Trợ lý "${name}"?`)) return;
+            const res = await fetch('/api/portal/delete-agent', {
+                method: 'POST',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ user_id: currentUser.user_id, id: id })
+            });
+            loadAllData();
+        }
+
+        async function loadDevices() {
+            const res = await fetch(`/api/portal/devices?user_id=${currentUser.user_id}`);
+            const data = await res.json();
+            userDevices = data.devices || [];
+            renderDevices();
+        }
+
+        function renderDevices() {
+            const container = document.getElementById('devicesTableContainer');
+            if (userDevices.length === 0) {
+                container.innerHTML = '<div style="color: var(--text-muted); font-size: 13px; padding: 20px 0;">Chưa có thiết bị nào được ghép đôi. Nhấp "+ Ghép Đôi Bằng Mã PIN 6 Số" để kết nối mạch ESP32.</div>';
+                return;
+            }
+
+            let html = `<table>
+                <thead>
+                    <tr>
+                        <th>Tên Thiết Bị</th>
+                        <th>Mã Định Danh (ID)</th>
+                        <th>Mã PIN</th>
+                        <th>Trợ Lý AI Điều Khiển</th>
+                        <th>Trạng Thái</th>
+                        <th>Thao Tác</th>
+                    </tr>
+                </thead>
+                <tbody>`;
+
+            userDevices.forEach(d => {
+                const options = userAgents.map(a => `<option value="${a.id}" ${a.id === d.agent_id ? 'selected' : ''}>${a.name}</option>`).join('');
+                const isOnline = d.status === 'online';
+                html += `<tr>
+                    <td style="font-weight: 600;">${d.name}</td>
+                    <td style="font-family: var(--mono); color: var(--text-muted);">${d.device_id}</td>
+                    <td style="font-family: var(--mono); font-weight: 600;">${d.pairing_code}</td>
+                    <td>
+                        <select onchange="changeDeviceAgent('${d.device_id}', this.value)" style="padding: 4px 8px; font-size: 12px; width: auto;">
+                            ${options}
+                        </select>
+                    </td>
+                    <td>
+                        <span class="status-dot ${isOnline ? 'online' : 'offline'}"></span>
+                        <span style="font-size: 12px; font-weight: 600; color: ${isOnline ? '#10b981' : '#64748b'};">${isOnline ? 'Online' : 'Offline'}</span>
+                    </td>
+                    <td>
+                        <button class="btn btn-danger btn-sm" onclick="deleteDevice('${d.device_id}', '${d.name}')">Hủy Ghép Đôi</button>
+                    </td>
+                </tr>`;
+            });
+
+            html += `</tbody></table>`;
+            container.innerHTML = html;
+        }
+
+        function openBindModal() {
+            document.getElementById('pinInput').value = "";
+            document.getElementById('botNameInput').value = "";
+            document.getElementById('bindModal').style.display = 'flex';
+        }
+
+        function closeBindModal() {
+            document.getElementById('bindModal').style.display = 'none';
+        }
 
         async function submitBindDevice() {
             const pin = document.getElementById('pinInput').value.trim();
-            const name = document.getElementById('botNameInput').value.trim();
+            const name = document.getElementById('botNameInput').value.trim() || 'Thiết Bị ESP32';
             const agentId = document.getElementById('bindAgentSelect').value;
-            if (pin.length !== 6) { alert('Mã PIN phải đúng 6 số trên màn hình mạch!'); return; }
+
+            if (pin.length !== 6) {
+                alert("Mã PIN phải đúng 6 chữ số.");
+                return;
+            }
 
             const res = await fetch('/api/portal/bind', {
                 method: 'POST',
@@ -755,28 +810,45 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         }
 
         async function changeDeviceAgent(deviceId, agentId) {
-            const res = await fetch('/api/portal/assign-agent', {
+            await fetch('/api/portal/assign-agent', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ user_id: currentUser.user_id, device_id: deviceId, agent_id: agentId })
             });
-            const data = await res.json();
             loadAllData();
         }
 
         async function deleteDevice(deviceId, name) {
-            if (!confirm(`Bạn có chắc muốn hủy ghép đôi mạch "${name}"?`)) return;
-            const res = await fetch('/api/portal/delete-device', {
+            if (!confirm(`Bạn có chắc muốn hủy ghép đôi thiết bị "${name}"?`)) return;
+            await fetch('/api/portal/delete-device', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ user_id: currentUser.user_id, device_id: deviceId })
             });
-            const data = await res.json();
-            alert(data.message);
             loadDevices();
         }
 
-        // Khôi phục phiên làm việc
+        function loadFirmwareEndpoints() {
+            const origin = window.location.origin;
+            const wssOrigin = origin.replace('https://', 'wss://').replace('http://', 'ws://');
+            const wsUrl = `${wssOrigin}/xiaozhi/v1/`;
+            const otaUrl = `${origin}/xiaozhi/ota/`;
+
+            document.getElementById('fwWssUrl').value = wsUrl;
+            document.getElementById('fwOtaUrl').value = otaUrl;
+
+            const configObj = {
+                "websocket": {
+                    "url": wsUrl
+                },
+                "ota": {
+                    "url": otaUrl
+                }
+            };
+            document.getElementById('fwJsonConfig').value = JSON.stringify(configObj, null, 2);
+        }
+
+        // Khôi phục phiên làm việc nếu đã đăng nhập
         const saved = sessionStorage.getItem('nioh_user');
         if (saved) {
             try { onLoginSuccess(JSON.parse(saved)); } catch(e){}
