@@ -79,3 +79,4 @@ async def get_vietnam_news(category: str = "tin-nong", max_items: int = 3) -> di
     except Exception as e:
         logger.error(f"Lỗi tải tin tức RSS ({rss_url}): {e}")
         return {"success": False, "summary": f"Không thể lấy tin tức: {str(e)}"}
+

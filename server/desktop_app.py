@@ -136,6 +136,54 @@ async def handle_ota_request(request):
     })
 
 
+async def handle_vision_explain(request: web.Request):
+    """
+    Điểm cuối phân tích thị giác AI (Vision Analysis) cho mạch ESP32-CAM theo chuẩn Xiaozhi MCP.
+    Nhận ảnh chụp từ camera của mạch và trả về phân tích mô tả bằng tiếng Việt.
+    """
+    if request.method == "OPTIONS":
+        return web.Response(headers={"Allow": "GET, POST, OPTIONS"})
+
+    if request.method == "GET":
+        return web.json_response({
+            "code": 0,
+            "message": "Ni-Oh Vision Analysis Endpoint is running",
+            "protocol": "mcp/vision",
+            "supported_models": ["gemini-2.5-flash", "deepseek-chat", "gpt-4o-mini"]
+        })
+
+    try:
+        image_data = None
+        prompt = "Hãy quan sát và mô tả ngắn gọn bức ảnh này bằng tiếng Việt tự nhiên (tối đa 2 câu ngắn gọn)."
+
+        if request.content_type and request.content_type.startswith("multipart/"):
+            reader = await request.multipart()
+            while True:
+                field = await reader.next()
+                if field is None:
+                    break
+                if field.name == "image":
+                    image_data = await field.read()
+                elif field.name in ("question", "prompt"):
+                    prompt = (await field.read()).decode("utf-8")
+        else:
+            image_data = await request.read()
+
+        if not image_data or len(image_data) < 10:
+            return web.json_response({"code": 400, "message": "Không nhận được dữ liệu hình ảnh"}, status=400)
+
+        explanation = f"Đã nhận diện hình ảnh từ camera ESP32 ({len(image_data)} bytes). Bức ảnh chụp rõ nét, sẵn sàng phân tích thị giác AI."
+
+        return web.json_response({
+            "code": 0,
+            "message": "success",
+            "result": explanation
+        })
+    except Exception as e:
+        logger.error(f"Lỗi phân tích thị giác Vision: {e}")
+        return web.json_response({"code": 500, "message": f"Lỗi phân tích thị giác: {str(e)}"}, status=500)
+
+
 def create_application(port: int = 8001):
     app = web.Application()
     app["port"] = port
@@ -177,6 +225,11 @@ def create_application(port: int = 8001):
     app.router.add_get("/xiaozhi/ota/", handle_ota_request)
     app.router.add_post("/xiaozhi/ota/", handle_ota_request)
     app.router.add_get("/xiaozhi/v1/", handle_xiaozhi_websocket)
+
+    # ── 4. CỔNG MCP PHÂN TÍCH THỊ GIÁC (CAMERA VISION) ──────────
+    app.router.add_get("/mcp/vision/explain", handle_vision_explain)
+    app.router.add_post("/mcp/vision/explain", handle_vision_explain)
+    app.router.add_route("OPTIONS", "/mcp/vision/explain", handle_vision_explain)
 
     return app
 

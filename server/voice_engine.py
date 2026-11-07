@@ -41,6 +41,7 @@ from server.tools.free_search import search_web
 from server.tools.pc_control import execute_pc_command
 from server.tools.vietnam_datetime import get_vietnam_time_summary
 from server.tools.vietnam_news import get_vietnam_news
+from server.tools.mcp_manager import DeviceMCPClient, execute_server_tool, SERVER_TOOLS_SCHEMA
 
 # Thử nạp thư viện C libopus qua pyogg để giải mã âm thanh nhị phân từ ESP32
 HAS_OPUS = False
@@ -294,8 +295,11 @@ async def generate_speech_audio(text: str, voice: str = "vi-VN-HoaiMyNeural", ra
 
 # ── BỘ XỬ LÝ TRUY VẤN TIẾNG VIỆT, CÔNG CỤ & LLM ─────────────────────
 
-async def process_vietnamese_query(user_text: str, dev_info: dict) -> str:
-    """Xử lý câu thoại người dùng qua các công cụ Việt hóa hoặc mô hình LLM."""
+async def process_vietnamese_query(user_text: str, dev_info: dict, mcp_client: DeviceMCPClient = None) -> str:
+    """
+    Xử lý câu thoại người dùng qua các công cụ Việt hóa hoặc mô hình LLM.
+    Hỗ trợ cả Function Calling nội bộ và Model Context Protocol (MCP) từ phần cứng ESP32.
+    """
     query = user_text.strip()
     if not query:
         return random.choice(VIETNAMESE_WAKE_RESPONSES)
@@ -311,92 +315,114 @@ async def process_vietnamese_query(user_text: str, dev_info: dict) -> str:
     if any(cmd in lower for cmd in VIETNAMESE_EXIT_COMMANDS):
         return random.choice(VIETNAMESE_EXIT_RESPONSES)
 
-    # 3. Công cụ Ngày Giờ & Lịch Âm Việt Nam
+    # 3. Phản hồi nhanh cho các câu hỏi phổ biến
     if any(k in lower for k in ["mấy giờ", "bây giờ là mấy giờ", "hôm nay ngày mấy", "ngày bao nhiêu", "âm lịch", "lịch âm", "năm nay năm con gì"]):
         dt_res = get_vietnam_time_summary()
         if dt_res.get("success"):
             return dt_res.get("summary")
 
-    # 4. Công cụ Thời Tiết Việt Nam (Open-Meteo)
-    if server_cfg.get("enable_weather") and any(k in lower for k in ["thời tiết", "nhiệt độ", "mưa không", "trời hôm nay", "thời tiết ở"]):
-        loc = "Hà Nội"
-        for city in ["hà nội", "hồ chí minh", "sài gòn", "đà nẵng", "hải phòng", "cần thơ", "đà lạt", "nha trang", "huế", "vũng tàu", "quy nhơn", "quảng ninh", "nghệ an", "bình dương"]:
-            if city in lower:
-                loc = city.title()
-                break
-        w = await get_weather(loc)
-        if w.get("success"):
-            return w.get("summary") or f"Thời tiết tại {w['location']} hiện tại là {w.get('condition')}, nhiệt độ khoảng {w.get('temperature')} độ C, độ ẩm {w.get('humidity')}%."
-
-    # 5. Công cụ Tin Tức Báo Chí Việt Nam (VnExpress & Tuổi Trẻ)
-    if server_cfg.get("enable_news") and any(k in lower for k in ["tin tức", "tin nóng", "đọc báo", "thời sự", "tin mới nhất"]):
-        cat = "tin-nong"
-        if "công nghệ" in lower:
-            cat = "cong-nghe"
-        elif "kinh doanh" in lower or "kinh tế" in lower:
-            cat = "kinh-doanh"
-        elif "thể thao" in lower:
-            cat = "the-thao"
-        news = await get_vietnam_news(cat, max_items=3)
-        if news.get("success"):
-            return news.get("summary")
-
-    # 6. Công cụ Điều Khiển PC
-    if server_cfg.get("enable_pc_control") and any(k in lower for k in ["tắt máy tính", "khóa máy", "chụp màn hình", "tăng âm lượng", "giảm âm lượng"]):
-        pc_res = execute_pc_command(lower)
-        if pc_res.get("success"):
-            return pc_res.get("message", "Đã thực hiện lệnh trên máy tính.")
-
-    # 7. Công cụ Tìm Kiếm Web (DuckDuckGo)
-    if server_cfg.get("enable_search") and (lower.startswith("tìm kiếm") or lower.startswith("tra cứu") or "giá vàng" in lower):
-        q = lower.replace("tìm kiếm", "").replace("tra cứu", "").strip() or query
-        s_res = await search_web(q)
-        if s_res.get("success"):
-            return f"Thông tin tìm được: {s_res.get('summary', '')[:200]}..."
-
-    # 8. Gọi LLM AI Đàm Thoại
+    # 4. Gọi LLM AI với bộ công cụ Function Calling & MCP hợp nhất
     api_key = dev_info.get("api_key") or server_cfg.get("api_key") or os.environ.get("NIOH_API_KEY", "")
     model = dev_info.get("model") or server_cfg.get("model", "deepseek-chat")
     base_url = server_cfg.get("base_url", "https://api.deepseek.com").rstrip("/")
     system_prompt = dev_info.get("prompt") or "Bạn là Ni-Oh, trợ lý ảo thông minh cho thiết bị ESP32 tại Việt Nam."
 
     if not api_key:
-        return f"Tôi đã nghe rõ: '{query}'. Để tôi có thể trả lời thông minh, vui lòng đăng nhập Web Console và cài đặt API Key cho Trợ lý của bạn."
+        return f"Tôi đã nghe rõ: '{query}'. Để tôi có thể trả lời thông minh và điều khiển thiết bị, vui lòng đăng nhập Web Console và cài đặt API Key cho Trợ lý của bạn."
+
+    # Tổng hợp danh mục công cụ (Server Tools + Device MCP Tools)
+    available_tools = mcp_client.get_unified_tools_schema() if mcp_client else SERVER_TOOLS_SCHEMA
+
+    messages = [
+        {
+            "role": "system",
+            "content": (
+                f"{system_prompt}\n"
+                "QUY TẮC PHÁT ÂM TIẾNG VIỆT:\n"
+                "- Trả lời hoàn toàn bằng tiếng Việt tự nhiên, súc tích (1 đến 2 câu ngắn).\n"
+                "- Không dùng emoji, dấu hoa thị, markdown hoặc ký tự đặc biệt vì câu trả lời sẽ được đọc trực tiếp qua loa của mạch ESP32.\n"
+                "- Tự động gọi công cụ phù hợp khi người dùng yêu cầu xem thời tiết, đọc tin tức, tra cứu ngày giờ/lịch âm, hoặc điều khiển phần cứng thiết bị."
+            )
+        },
+        {"role": "user", "content": query}
+    ]
 
     url = f"{base_url}/chat/completions"
     headers = {
         "Authorization": f"Bearer {api_key}",
         "Content-Type": "application/json"
     }
-    payload = {
-        "model": model,
-        "messages": [
-            {
-                "role": "system",
-                "content": (
-                    f"{system_prompt}\n"
-                    "QUY TẮC PHÁT ÂM TIẾNG VIỆT:\n"
-                    "- Trả lời hoàn toàn bằng tiếng Việt tự nhiên, súc tích (1 đến 2 câu ngắn).\n"
-                    "- Không dùng emoji, dấu hoa thị, markdown hoặc ký tự đặc biệt vì câu trả lời sẽ được đọc trực tiếp qua loa của mạch ESP32."
-                )
-            },
-            {"role": "user", "content": query}
-        ],
-        "temperature": 0.7,
-        "max_tokens": 256
-    }
 
     try:
         async with aiohttp.ClientSession() as session:
+            # Vòng gọi 1: Cho phép LLM tự động quyết định gọi Tool / MCP
+            payload = {
+                "model": model,
+                "messages": messages,
+                "tools": available_tools,
+                "temperature": 0.7,
+                "max_tokens": 256
+            }
+
             async with session.post(url, headers=headers, json=payload, timeout=12) as resp:
                 data = await resp.json()
-                if "choices" in data and len(data["choices"]) > 0:
-                    ans = data["choices"][0]["message"]["content"].strip()
-                    # Lọc sạch markdown trước khi trả về
-                    return ans.replace("*", "").replace("#", "").replace("`", "")
-                else:
+                if "choices" not in data or len(data["choices"]) == 0:
                     err = data.get("error", {}).get("message", "Máy chủ AI chưa phản hồi.")
                     return f"Lỗi từ dịch vụ AI: {err}"
+
+                choice = data["choices"][0]
+                message = choice.get("message", {})
+                tool_calls = message.get("tool_calls")
+
+                # Nếu LLM không gọi tool, trả về câu trả lời trực tiếp
+                if not tool_calls:
+                    ans = message.get("content", "").strip()
+                    return ans.replace("*", "").replace("#", "").replace("`", "")
+
+                # Nếu LLM yêu cầu gọi công cụ (Tool / MCP Calls)
+                messages.append(message)
+
+                for tc in tool_calls:
+                    fn = tc.get("function", {})
+                    fn_name = fn.get("name", "")
+                    call_id = tc.get("id", "call_1")
+                    try:
+                        fn_args = json.loads(fn.get("arguments", "{}"))
+                    except Exception:
+                        fn_args = {}
+
+                    logger.info(f"LLM quyết định gọi công cụ: {fn_name} với tham số: {fn_args}")
+
+                    # Kiểm tra xem là công cụ máy chủ hay công cụ phần cứng MCP
+                    if fn_name in ("get_weather", "get_vietnam_news", "get_vietnam_datetime", "web_search", "pc_control"):
+                        tool_output = await execute_server_tool(fn_name, fn_args)
+                    elif mcp_client:
+                        # Gọi công cụ phần cứng qua giao thức MCP trên mạch ESP32
+                        tool_output = await mcp_client.call_tool(fn_name, fn_args)
+                    else:
+                        tool_output = f"Công cụ {fn_name} hiện không khả dụng."
+
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": call_id,
+                        "content": str(tool_output)
+                    })
+
+                # Vòng gọi 2: Đưa kết quả thực thi công cụ vào LLM để tổng hợp câu trả lời giọng nói
+                payload_step2 = {
+                    "model": model,
+                    "messages": messages,
+                    "temperature": 0.7,
+                    "max_tokens": 256
+                }
+
+                async with session.post(url, headers=headers, json=payload_step2, timeout=12) as resp2:
+                    data2 = await resp2.json()
+                    if "choices" in data2 and len(data2["choices"]) > 0:
+                        ans2 = data2["choices"][0]["message"]["content"].strip()
+                        return ans2.replace("*", "").replace("#", "").replace("`", "")
+                    return "Đã hoàn thành yêu cầu của bạn."
+
     except Exception as e:
         logger.error(f"Lỗi gọi LLM API ({url}): {e}")
         return "Kết nối tới dịch vụ AI đang bị gián đoạn, bạn vui lòng thử lại sau nhé."
@@ -442,6 +468,7 @@ async def handle_xiaozhi_websocket(request: web.Request) -> web.WebSocketRespons
     pipeline = AudioPipeline()
     dev_info = get_device_info(device_id)
     session_id = f"sess_{os.urandom(6).hex()}"
+    mcp_client = DeviceMCPClient(ws, device_id)
 
     # Luồng kiểm tra ghép đôi thiết bị (Device Binding Flow)
     if not dev_info["is_bound"]:
@@ -503,6 +530,13 @@ async def handle_xiaozhi_websocket(request: web.Request) -> web.WebSocketRespons
                         ACTIVE_CONNECTIONS[device_id]["tx_packets"] += 1
                     logger.info(f"Hoàn tất bắt tay Hello với {device_id} (SampleRate: {sample_rate}Hz)")
 
+                    # Nếu mạch ESP32 hỗ trợ MCP (Model Context Protocol)
+                    features = data.get("features", {})
+                    if features.get("mcp"):
+                        logger.info(f"Mạch {device_id} kích hoạt tính năng MCP phần cứng")
+                        asyncio.create_task(mcp_client.initialize())
+                        asyncio.create_task(mcp_client.request_tools_list())
+
                 # 1.2. Nhận bản tin thoại Listen / Chat / STT
                 elif msg_type in ("listen", "chat", "stt"):
                     state = data.get("state", "")
@@ -524,8 +558,8 @@ async def handle_xiaozhi_websocket(request: web.Request) -> web.WebSocketRespons
                         # Nạp lại cấu hình thiết bị mới nhất phòng khi vừa được ghép đôi trên web
                         dev_info = get_device_info(device_id)
 
-                        # Xử lý nội dung người dùng nói
-                        reply_text = await process_vietnamese_query(text, dev_info)
+                        # Xử lý nội dung người dùng nói (hỗ trợ cả Server Tools và Device MCP)
+                        reply_text = await process_vietnamese_query(text, dev_info, mcp_client=mcp_client)
 
                         # Gửi bản tin STT cập nhật nội dung phản hồi lên màn hình LCD mạch ESP32
                         await ws.send_json({
@@ -572,6 +606,10 @@ async def handle_xiaozhi_websocket(request: web.Request) -> web.WebSocketRespons
                     descriptors = data.get("descriptors") or []
                     states = data.get("states") or []
                     logger.debug(f"Nhận bản tin IoT từ {device_id}: {descriptors} {states}")
+
+                # 1.6. Giao thức MCP (Model Context Protocol) JSON-RPC 2.0
+                elif msg_type == "mcp":
+                    mcp_client.handle_mcp_message(data)
 
             # ── 2. GÓI TIN ÂM THANH NHỊ PHÂN (BINARY OPUS FRAME) ───
             elif msg.type == web.WSMsgType.BINARY:

@@ -258,6 +258,36 @@ class TestNiOhDualServer(AioHTTPTestCase):
 
         await ws.close()
 
+    async def test_07_mcp_and_tool_integration(self):
+        from server.tools.mcp_manager import execute_server_tool, SERVER_TOOLS_SCHEMA
+
+        # 1. Test schema includes all 5 core tools
+        tool_names = [t["function"]["name"] for t in SERVER_TOOLS_SCHEMA]
+        self.assertIn("get_weather", tool_names)
+        self.assertIn("get_vietnam_news", tool_names)
+        self.assertIn("get_vietnam_datetime", tool_names)
+        self.assertIn("web_search", tool_names)
+        self.assertIn("pc_control", tool_names)
+
+        # 2. Test execution of server tools
+        res_weather = await execute_server_tool("get_weather", {"location": "Đà Nẵng"})
+        self.assertIn("Đà Nẵng", res_weather)
+
+        res_dt = await execute_server_tool("get_vietnam_datetime", {})
+        self.assertIn("Bây giờ là", res_dt)
+
+        # 3. Test Vision MCP Endpoint
+        vis_resp = await self.client.get("/mcp/vision/explain")
+        self.assertEqual(vis_resp.status, 200)
+        vis_data = await vis_resp.json()
+        self.assertEqual(vis_data["protocol"], "mcp/vision")
+
+        # POST image bytes to Vision MCP
+        vis_post = await self.client.post("/mcp/vision/explain", data=b"fake_jpeg_image_data_bytes_1234567890")
+        self.assertEqual(vis_post.status, 200)
+        vis_post_data = await vis_post.json()
+        self.assertEqual(vis_post_data["code"], 0)
+
 
 if __name__ == "__main__":
     unittest.main()
