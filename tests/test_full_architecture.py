@@ -6,6 +6,7 @@ import random
 import json
 import unittest
 from aiohttp import web
+import aiohttp
 from aiohttp.test_utils import AioHTTPTestCase
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -174,6 +175,88 @@ class TestNiOhDualServer(AioHTTPTestCase):
         cf_unlink = await self.client.post("/api/gateway/cf-unlink")
         self.assertEqual(cf_unlink.status, 200)
         self.assertTrue((await cf_unlink.json())["success"])
+
+    async def test_06_vietnamese_localization_and_xiaozhi_protocol(self):
+        from server.tools.vietnam_datetime import get_vietnam_time_summary
+        from server.voice_engine import process_vietnamese_query
+
+        # 1. Test Vietnamese DateTime (GMT+7 & Lunar Calendar)
+        dt = get_vietnam_time_summary()
+        self.assertTrue(dt["success"])
+        self.assertIn("Dương lịch", dt["summary"])
+        self.assertIn("Âm lịch", dt["summary"])
+
+        # 2. Test Vietnamese Wake-word & Exit responses
+        wake_res = await process_vietnamese_query("chào ni-oh", {})
+        self.assertTrue(len(wake_res) > 0)
+
+        exit_res = await process_vietnamese_query("tạm biệt bạn nhé", {})
+        self.assertTrue("tạm biệt" in exit_res.lower() or "hẹn gặp lại" in exit_res.lower() or "tạm dừng" in exit_res.lower())
+
+        # 3. Test OTA endpoint compliance with Xiaozhi protocol
+        ota_resp = await self.client.get("/xiaozhi/ota/")
+        self.assertEqual(ota_resp.status, 200)
+        ota_json = await ota_resp.json()
+        self.assertEqual(ota_json["server_time"]["timezone_offset"], 420)  # +7 GMT for Vietnam
+
+        # 4. Test WebSocket Voice Engine Handshake and PIN binding
+        test_mac = f"ESP32-VN-{uuid.uuid4().hex[:4].upper()}"
+        ws = await self.client.ws_connect("/xiaozhi/v1/", headers={"Device-Id": test_mac})
+
+        # Device is not yet bound: server sends initial pairing PIN display message
+        first_msg = await ws.receive_json()
+        self.assertEqual(first_msg["type"], "stt")
+        self.assertIn("Mã PIN:", first_msg["text"])
+
+        # Send Hello handshake
+        await ws.send_json({
+            "type": "hello",
+            "version": 1,
+            "transport": "websocket",
+            "audio_params": {
+                "format": "opus",
+                "sample_rate": 16000,
+                "channels": 1,
+                "frame_duration": 60
+            }
+        })
+
+        # Read messages until we get 'hello'
+        hello_reply = None
+        for _ in range(10):
+            msg = await ws.receive()
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                if data.get("type") == "hello":
+                    hello_reply = data
+                    break
+
+        self.assertIsNotNone(hello_reply)
+        self.assertEqual(hello_reply["type"], "hello")
+        self.assertEqual(hello_reply["version"], 1)
+        self.assertEqual(hello_reply["audio_params"]["sample_rate"], 16000)
+
+        # Send Wake-up command
+        await ws.send_json({
+            "type": "listen",
+            "state": "detect",
+            "text": "chào ni-oh"
+        })
+
+        reply_stt = None
+        for _ in range(10):
+            msg = await ws.receive()
+            if msg.type == aiohttp.WSMsgType.TEXT:
+                data = json.loads(msg.data)
+                if data.get("type") == "stt":
+                    reply_stt = data
+                    break
+
+        self.assertIsNotNone(reply_stt)
+        self.assertEqual(reply_stt["type"], "stt")
+        self.assertTrue(len(reply_stt["text"]) > 0)
+
+        await ws.close()
 
 
 if __name__ == "__main__":

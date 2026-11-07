@@ -22,6 +22,7 @@ Thành phần 2: WEB SERVER (Quản Lý Trợ Lý & Thiết Bị):
 
 import os
 import sys
+import time
 
 # Khắc phục lỗi pythonw.exe trên Windows khi stdout/stderr là None
 if sys.stdout is None:
@@ -112,7 +113,7 @@ async def handle_root_request(request):
 
 
 async def handle_ota_request(request):
-    """Endpoint trả về cấu hình OTA cho ESP32 khi kết nối qua Cloudflare."""
+    """Endpoint trả về cấu hình OTA cho ESP32 chuẩn theo xiaozhi-esp32-server."""
     ws_url = GATEWAY_STATE.get("wss_url")
     if not ws_url:
         host = request.host
@@ -120,12 +121,17 @@ async def handle_ota_request(request):
         ws_url = f"{scheme}://{host}/xiaozhi/v1/"
 
     return web.json_response({
+        "server_time": {
+            "timestamp": int(round(time.time() * 1000)),
+            "timezone_offset": 420  # +7 GMT cho Việt Nam (7 * 60 phút)
+        },
         "firmware": {
             "version": os.environ.get("NIOH_FIRMWARE_VERSION", "2.5.3"),
             "url": os.environ.get("NIOH_FIRMWARE_URL", "")
         },
         "websocket": {
-            "url": ws_url
+            "url": ws_url,
+            "token": ""
         }
     })
 
@@ -169,6 +175,7 @@ def create_application(port: int = 8001):
 
     # ── 3. CỔNG OTA & WEBSOCKET VOICE CHO ESP32 ─────────────────
     app.router.add_get("/xiaozhi/ota/", handle_ota_request)
+    app.router.add_post("/xiaozhi/ota/", handle_ota_request)
     app.router.add_get("/xiaozhi/v1/", handle_xiaozhi_websocket)
 
     return app
