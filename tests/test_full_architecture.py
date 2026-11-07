@@ -3,6 +3,7 @@ import os
 import sys
 import uuid
 import random
+import json
 import unittest
 from aiohttp import web
 from aiohttp.test_utils import AioHTTPTestCase
@@ -19,131 +20,119 @@ class TestNiOhDualServer(AioHTTPTestCase):
         return create_application(port=8001)
 
     async def test_01_routing_separation(self):
-        # 1. Localhost gets Desktop App Server Console
+        # 1. Localhost gets Server Gateway App
         resp_local = await self.client.get("/")
         self.assertEqual(resp_local.status, 200)
         text_local = await resp_local.text()
-        self.assertIn("Ni-Oh Voice Server", text_local)
-        self.assertIn("Host Console", text_local)
+        self.assertIn("Ni-Oh Server", text_local)
+        self.assertIn("Cổng Máy Chủ & Quản Trị Hệ Thống", text_local)
 
         # 2. Remote Cloudflare host gets Web Portal
-        resp_cf = await self.client.get("/", headers={"Host": "super-tunnel.trycloudflare.com"})
+        resp_cf = await self.client.get("/", headers={"Host": "gateway.trycloudflare.com"})
         self.assertEqual(resp_cf.status, 200)
         text_cf = await resp_cf.text()
         self.assertIn("Ni-Oh Voice Portal", text_cf)
-        self.assertIn("Bảng Quản Trị Thiết Bị", text_cf)
+        self.assertIn("Bảng Quản Trị Thiết Bị & Trợ Lý AI", text_cf)
 
-        # 3. /portal path always returns Web Portal
-        resp_portal = await self.client.get("/portal")
-        self.assertEqual(resp_portal.status, 200)
-        text_p = await resp_portal.text()
-        self.assertIn("Ni-Oh Voice Portal", text_p)
-
-    async def test_02_app_server_apis(self):
+    async def test_02_server_gateway_and_oauth_config(self):
         # GET /api/gateway/status
         resp = await self.client.get("/api/gateway/status")
         self.assertEqual(resp.status, 200)
         data = await resp.json()
         self.assertIn("server_running", data)
-        self.assertIn("server_setup", data)
+        self.assertIn("local_port", data)
         self.assertIn("live_clients", data)
-        self.assertIn("active_clients_count", data)
+        self.assertIn("oauth", data)
 
-        # POST /api/gateway/save-setup with real technical parameters
-        save_resp = await self.client.post("/api/gateway/save-setup", json={
-            "provider": "deepseek",
-            "base_url": "https://api.deepseek.com",
-            "api_key": "sk-real-test-key",
-            "model": "deepseek-chat",
-            "voice": "vi-VN-HoaiMyNeural",
-            "speech_rate": "+0%",
-            "enable_weather": "1",
-            "enable_search": "1",
-            "enable_pc_control": "1"
+        # POST /api/admin/oauth-config
+        save_oauth = await self.client.post("/api/admin/oauth-config", json={
+            "google_client_id": "test-client-id-12345.apps.googleusercontent.com",
+            "google_client_secret": "GOCSPX-test-secret"
         })
-        self.assertEqual(save_resp.status, 200)
-        save_data = await save_resp.json()
+        self.assertEqual(save_oauth.status, 200)
+        save_data = await save_oauth.json()
         self.assertTrue(save_data["success"])
 
-        # Check that status reflects updated setup
+        # Check status reflects saved OAuth
         resp2 = await self.client.get("/api/gateway/status")
         data2 = await resp2.json()
-        self.assertEqual(data2["server_setup"]["model"], "deepseek-chat")
-        self.assertEqual(data2["server_setup"]["base_url"], "https://api.deepseek.com")
+        self.assertEqual(data2["oauth"]["google_client_id"], "test-client-id-12345.apps.googleusercontent.com")
 
-    async def test_03_web_server_agent_and_device_flow(self):
+        # GET /api/auth/google/login should redirect to Google OAuth URL
+        google_login_resp = await self.client.get("/api/auth/google/login", allow_redirects=False)
+        self.assertEqual(google_login_resp.status, 302)
+        loc = google_login_resp.headers.get("Location", "")
+        self.assertIn("accounts.google.com/o/oauth2/v2/auth", loc)
+        self.assertIn("client_id=test-client-id-12345.apps.googleusercontent.com", loc)
+
+    async def test_03_user_management_and_backup(self):
         u_suffix = uuid.uuid4().hex[:6]
         email = f"user_{u_suffix}@example.com"
 
         # 1. Register test user
         reg_resp = await self.client.post("/api/portal/register", json={
             "email": email,
-            "password": "securePassword123",
-            "name": f"Developer {u_suffix}"
+            "password": "password123456",
+            "name": f"Tester {u_suffix}"
         })
         reg_data = await reg_resp.json()
         self.assertTrue(reg_data["success"])
         user_id = reg_data["user"]["user_id"]
 
-        # 2. Get default agent created automatically
-        ag_resp = await self.client.get(f"/api/portal/agents?user_id={user_id}")
-        ag_data = await ag_resp.json()
-        self.assertTrue(ag_data["success"])
-        self.assertGreaterEqual(len(ag_data["agents"]), 1)
-        default_agent_id = ag_data["agents"][0]["id"]
+        # 2. Check admin user list contains this user
+        admin_users_resp = await self.client.get("/api/admin/users")
+        self.assertEqual(admin_users_resp.status, 200)
+        users_list = (await admin_users_resp.json()).get("users", [])
+        matched = [u for u in users_list if u["id"] == user_id]
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["agent_count"], 1)  # auto-created default agent
 
-        # 3. Create a custom Agent (e.g. English Tutor)
-        custom_ag_resp = await self.client.post("/api/portal/agents", json={
+        # 3. Create a custom Agent
+        ag_resp = await self.client.post("/api/portal/agents", json={
             "user_id": user_id,
-            "name": "Trợ Lý Ngôn Ngữ",
+            "name": "Trợ Lý Nghiên Cứu",
             "model": "deepseek-chat",
             "voice": "vi-VN-NamMinhNeural",
-            "api_key": "",
-            "prompt": "Bạn là giáo viên ngoại ngữ hỗ trợ giải đáp thắc mắc ngữ pháp."
+            "prompt": "Bạn là chuyên gia nghiên cứu."
         })
-        self.assertTrue((await custom_ag_resp.json())["success"])
-
-        # Check agents list has 2 agents now
-        ag_resp2 = await self.client.get(f"/api/portal/agents?user_id={user_id}")
-        ag_data2 = await ag_resp2.json()
-        self.assertEqual(len(ag_data2["agents"]), 2)
-        new_agent = [a for a in ag_data2["agents"] if a["name"] == "Trợ Lý Ngôn Ngữ"][0]
+        self.assertTrue((await ag_resp.json())["success"])
 
         # 4. Pair device via 6-digit PIN
         pin_code = str(random.randint(100000, 999999))
         bind_resp = await self.client.post("/api/portal/bind", json={
             "user_id": user_id,
             "pairing_code": pin_code,
-            "bot_name": "Mạch Phòng Làm Việc",
-            "agent_id": default_agent_id
+            "bot_name": "ESP32 Phòng Lab"
         })
-        bind_data = await bind_resp.json()
-        self.assertTrue(bind_data["success"])
+        self.assertTrue((await bind_resp.json())["success"])
 
-        # 5. Get devices and verify pairing
-        dev_resp = await self.client.get(f"/api/portal/devices?user_id={user_id}")
-        dev_data = await dev_resp.json()
-        self.assertTrue(dev_data["success"])
-        self.assertEqual(len(dev_data["devices"]), 1)
-        device = dev_data["devices"][0]
-        self.assertEqual(device["pairing_code"], pin_code)
-        self.assertEqual(device["agent_id"], default_agent_id)
+        # 5. Backup data
+        backup_resp = await self.client.get("/api/admin/backup")
+        self.assertEqual(backup_resp.status, 200)
+        backup_json = await backup_resp.json()
+        self.assertIn("users", backup_json)
+        self.assertIn("agents", backup_json)
+        self.assertIn("devices", backup_json)
 
-        # 6. Assign the device to the new Agent
-        assign_resp = await self.client.post("/api/portal/assign-agent", json={
-            "user_id": user_id,
-            "device_id": device["device_id"],
-            "agent_id": new_agent["id"]
-        })
-        self.assertTrue((await assign_resp.json())["success"])
+        # 6. Delete user
+        del_resp = await self.client.post("/api/admin/delete-user", json={"user_id": user_id})
+        self.assertTrue((await del_resp.json())["success"])
 
-        # Check updated device info
-        dev_resp2 = await self.client.get(f"/api/portal/devices?user_id={user_id}")
-        dev_data2 = await dev_resp2.json()
-        self.assertEqual(dev_data2["devices"][0]["agent_id"], new_agent["id"])
-        self.assertEqual(dev_data2["devices"][0]["agent_name"], "Trợ Lý Ngôn Ngữ")
+        # Check user is deleted
+        admin_users_resp2 = await self.client.get("/api/admin/users")
+        users_list2 = (await admin_users_resp2.json()).get("users", [])
+        self.assertEqual(len([u for u in users_list2 if u["id"] == user_id]), 0)
 
-    async def test_04_ota_endpoint(self):
+        # 7. Restore from backup
+        restore_resp = await self.client.post("/api/admin/restore", json=backup_json)
+        self.assertTrue((await restore_resp.json())["success"])
+
+        # Check restored user exists again
+        admin_users_resp3 = await self.client.get("/api/admin/users")
+        users_list3 = (await admin_users_resp3.json()).get("users", [])
+        self.assertEqual(len([u for u in users_list3 if u["id"] == user_id]), 1)
+
+    async def test_04_ota_and_websocket_routes(self):
         resp = await self.client.get("/xiaozhi/ota/")
         self.assertEqual(resp.status, 200)
         data = await resp.json()

@@ -1,19 +1,17 @@
 """
-Ni-Oh Voice Server - Dual-Component Architecture
-------------------------------------------------
-Thành phần 1: APP SERVER (Desktop Host Console):
-   - Cấu hình nhà cung cấp LLM (OpenAI-compatible: DeepSeek, OpenRouter, OpenAI, Gemini, Ollama)
-   - Cấu hình giọng đọc Edge-TTS Neural và công cụ hệ thống (Weather, Search, PC Control)
-   - Kích hoạt Cloudflare Anycast Tunnel và xuất các điểm cuối công khai:
-     + Web Portal: Quản lý Trợ lý AI và thiết bị ESP32 từ xa
-     + WebSocket Voice Endpoint: Giao thức thoại cho firmware Xiaozhi
-     + OTA Endpoint: Cập nhật firmware thiết bị từ xa
-   - Giám sát các kết nối WebSocket thời gian thực (Live Client Sessions)
+Ni-Oh Server - Dual-Component Architecture
+------------------------------------------
+Thành phần 1: APP SERVER (Cổng Máy Chủ & Quản Trị Hệ Thống):
+   - Mở cổng server nội bộ (Port 8001), kích hoạt Cloudflare Anycast Tunnel
+   - Xuất 2 link chính: Link Web Server cho người dùng và Link cho mạch Xiaozhi
+   - Quản lý dữ liệu người dùng bằng tài khoản Google (OAuth credentials, danh sách users, backup/restore)
+   - Giám sát các kết nối WebSocket đang hoạt động trực tiếp
 
-Thành phần 2: WEB PORTAL (Web Console):
-   - Quản lý Trợ lý AI (Agents): Tạo, sửa nhân vật, cấu hình Model AI, giọng đọc TTS, System Prompt
-   - Quản lý Thiết bị (Devices): Ghép đôi mạch bằng mã PIN 6 số, gán Agent cho từng thiết bị
-   - Cung cấp thông số cấu hình firmware chuẩn
+Thành phần 2: WEB SERVER (Quản Lý Trợ Lý & Thiết Bị):
+   - Đăng nhập liên kết tài khoản Google OAuth 2.0 hoặc tài khoản Email
+   - Quản lý Trợ lý AI (Agents): Cấu hình nhân vật, model LLM, API Key riêng, giọng đọc TTS
+   - Quản lý Thiết bị (Devices): Ghép đôi bằng mã PIN 6 số trên màn hình LCD, gán Agent cho mạch
+   - Cung cấp cấu hình JSON cho firmware ESP32
 
 Động cơ WebSocket Voice Engine:
    - Giao thức bắt tay Hello Handshake Xiaozhi tại /xiaozhi/v1/
@@ -45,11 +43,17 @@ from server.gateway_app import (
     HTML_GATEWAY_APP,
     GATEWAY_STATE,
     api_get_gateway_status,
-    api_save_server_setup,
-    api_toggle_gateway
+    api_toggle_gateway,
+    api_admin_get_users,
+    api_admin_delete_user,
+    api_admin_save_oauth,
+    api_admin_backup_data,
+    api_admin_restore_data
 )
 from server.web_portal import (
     HTML_XIAOZHI_PORTAL,
+    api_google_login,
+    api_google_callback,
     api_portal_login,
     api_portal_register,
     api_portal_get_agents,
@@ -87,9 +91,9 @@ async def handle_root_request(request):
     """
     Tự động phân luồng URL thông minh:
     - Nếu truy cập từ bên ngoài qua Cloudflare (trycloudflare.com hoặc tên miền riêng):
-      Phục vụ WEB SERVER (Cổng quản lý Agent & Thiết bị xiaozhi.me)
+      Phục vụ WEB SERVER (Cổng quản trị Agent & Thiết bị)
     - Nếu truy cập từ máy chủ local (localhost, 127.0.0.1):
-      Phục vụ APP SERVER (Giao diện điều khiển & thiết lập máy chủ)
+      Phục vụ APP SERVER (Giao diện mở cổng server & quản lý data)
     """
     host = request.host.split(":")[0].lower()
     is_remote = (
@@ -127,14 +131,20 @@ def create_application(port: int = 8001):
     # ── ĐIỀU HƯỚNG TRANG CHỦ & PHÂN LUỒNG ─────────────────────────
     app.router.add_get("/", handle_root_request)
 
-    # ── 1. APP SERVER (Desktop Setup & Control Center) ───────────
+    # ── 1. APP SERVER (Mở Cổng Server & Quản Lý Dữ Liệu) ────────
     app.router.add_get("/gateway", lambda req: web.Response(text=HTML_GATEWAY_APP, content_type="text/html", charset="utf-8"))
     app.router.add_get("/api/gateway/status", api_get_gateway_status)
-    app.router.add_post("/api/gateway/save-setup", api_save_server_setup)
     app.router.add_post("/api/gateway/toggle", api_toggle_gateway)
+    app.router.add_get("/api/admin/users", api_admin_get_users)
+    app.router.add_post("/api/admin/delete-user", api_admin_delete_user)
+    app.router.add_post("/api/admin/oauth-config", api_admin_save_oauth)
+    app.router.add_get("/api/admin/backup", api_admin_backup_data)
+    app.router.add_post("/api/admin/restore", api_admin_restore_data)
 
-    # ── 2. WEB SERVER (Agent & Device Management Portal — xiaozhi.me)
+    # ── 2. WEB SERVER (Đăng Nhập Google & Quản Lý Bot) ───────────
     app.router.add_get("/portal", lambda req: web.Response(text=HTML_XIAOZHI_PORTAL, content_type="text/html", charset="utf-8"))
+    app.router.add_get("/api/auth/google/login", api_google_login)
+    app.router.add_get("/api/auth/google/callback", api_google_callback)
     app.router.add_post("/api/portal/register", api_portal_register)
     app.router.add_post("/api/portal/login", api_portal_login)
     app.router.add_get("/api/portal/agents", api_portal_get_agents)

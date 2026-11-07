@@ -3,7 +3,7 @@ Ni-Oh Voice Portal (Web Server Console)
 ---------------------------------------
 Thành phần 2: Giao diện Web quản trị dành cho người dùng:
 - Truy cập từ xa thông qua đường link Cloudflare được xuất ra từ App Server
-- Đăng nhập & Đăng ký tài khoản người dùng
+- Đăng nhập liên kết tài khoản Google OAuth 2.0 Web Flow & Đăng ký Email/Mật khẩu
 - Quản lý Trợ lý AI (Agents): Cấu hình nhân vật, model LLM, API Key riêng, giọng đọc TTS
 - Quản lý Thiết bị (Devices): Ghép đôi thiết bị bằng mã PIN 6 số, gán Agent cho từng mạch
 - Theo dõi trạng thái hoạt động thực tế của từng thiết bị
@@ -16,6 +16,7 @@ import sqlite3
 import hashlib
 import uuid
 import logging
+import aiohttp
 from aiohttp import web
 
 logger = logging.getLogger("nioh.web_portal")
@@ -37,9 +38,22 @@ def init_db():
         email TEXT UNIQUE,
         password_hash TEXT,
         name TEXT,
+        avatar TEXT,
+        provider TEXT DEFAULT 'local',
+        google_id TEXT,
         created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
     )
     """)
+    # Tự động đồng bộ các cột nếu cơ sở dữ liệu đã tồn tại từ trước
+    c.execute("PRAGMA table_info(users)")
+    cols = [col[1] for col in c.fetchall()]
+    if "provider" not in cols:
+        c.execute("ALTER TABLE users ADD COLUMN provider TEXT DEFAULT 'local'")
+    if "google_id" not in cols:
+        c.execute("ALTER TABLE users ADD COLUMN google_id TEXT")
+    if "avatar" not in cols:
+        c.execute("ALTER TABLE users ADD COLUMN avatar TEXT")
+
     c.execute("""
     CREATE TABLE IF NOT EXISTS agents (
         id TEXT PRIMARY KEY,
@@ -66,6 +80,12 @@ def init_db():
         FOREIGN KEY(agent_id) REFERENCES agents(id)
     )
     """)
+    c.execute("""
+    CREATE TABLE IF NOT EXISTS oauth_config (
+        key TEXT PRIMARY KEY,
+        value TEXT
+    )
+    """)
     conn.commit()
     conn.close()
 
@@ -76,7 +96,179 @@ def _hash_pw(password: str) -> str:
     return hashlib.sha256(password.encode("utf-8")).hexdigest()
 
 
-# ── REST API XÁC THỰC NGƯỜI DÙNG ───────────────────────────────────
+def get_oauth_config() -> dict:
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS oauth_config (key TEXT PRIMARY KEY, value TEXT)")
+    c.execute("SELECT key, value FROM oauth_config")
+    rows = dict(c.fetchall())
+    conn.close()
+    return {
+        "google_client_id": rows.get("google_client_id", os.environ.get("GOOGLE_CLIENT_ID", "")),
+        "google_client_secret": rows.get("google_client_secret", os.environ.get("GOOGLE_CLIENT_SECRET", ""))
+    }
+
+
+def save_oauth_config(data: dict):
+    conn = sqlite3.connect(DB_PATH)
+    c = conn.cursor()
+    c.execute("CREATE TABLE IF NOT EXISTS oauth_config (key TEXT PRIMARY KEY, value TEXT)")
+    for k, v in data.items():
+        c.execute("INSERT OR REPLACE INTO oauth_config (key, value) VALUES (?, ?)", (k, str(v).strip()))
+    conn.commit()
+    conn.close()
+
+
+# ── REST API ĐĂNG NHẬP LIÊN KẾT GOOGLE OAUTH 2.0 ──────────────────
+
+async def api_google_login(request: web.Request):
+    """Khởi tạo luồng xác thực Google OAuth 2.0."""
+    cfg = get_oauth_config()
+    client_id = cfg.get("google_client_id")
+    if not client_id:
+        return web.Response(
+            text="""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Thông Báo Cấu Hình</title></head>
+<body style="background:#090d16;color:#f1f5f9;font-family:sans-serif;padding:40px;text-align:center;">
+    <div style="max-width:500px;margin:auto;background:#111827;padding:30px;border-radius:12px;border:1px solid #1f293d;">
+        <h3 style="margin-bottom:12px;">Chưa Cấu Hình Google Client ID</h3>
+        <p style="color:#94a3b8;font-size:14px;line-height:1.5;margin-bottom:20px;">
+            Chủ máy chủ chưa thiết lập Google Client ID trong Host Console.<br>
+            Bạn có thể đăng nhập bằng Email/Mật khẩu hoặc yêu cầu chủ máy chủ nhập Client ID trong Desktop App.
+        </p>
+        <a href="/portal" style="color:#3b82f6;text-decoration:none;font-weight:600;">← Quay lại trang đăng nhập</a>
+    </div>
+</body>
+</html>""",
+            content_type="text/html",
+            charset="utf-8",
+            status=400
+        )
+
+    host = request.host
+    scheme = "https" if request.scheme == "https" or "trycloudflare.com" in host else "http"
+    redirect_uri = f"{scheme}://{host}/api/auth/google/callback"
+
+    state = uuid.uuid4().hex[:16]
+    google_url = (
+        f"https://accounts.google.com/o/oauth2/v2/auth?"
+        f"client_id={client_id}&"
+        f"redirect_uri={redirect_uri}&"
+        f"response_type=code&"
+        f"scope=openid%20email%20profile&"
+        f"access_type=offline&"
+        f"state={state}&"
+        f"prompt=select_account"
+    )
+    raise web.HTTPFound(google_url)
+
+
+async def api_google_callback(request: web.Request):
+    """Tiếp nhận code từ Google, lấy thông tin người dùng và liên kết tài khoản."""
+    code = request.query.get("code")
+    error = request.query.get("error")
+
+    if error or not code:
+        logger.warning(f"Google OAuth callback: error={error}")
+        raise web.HTTPFound(f"/portal?error={error or 'cancelled'}")
+
+    cfg = get_oauth_config()
+    client_id = cfg.get("google_client_id")
+    client_secret = cfg.get("google_client_secret")
+
+    host = request.host
+    scheme = "https" if request.scheme == "https" or "trycloudflare.com" in host else "http"
+    redirect_uri = f"{scheme}://{host}/api/auth/google/callback"
+
+    token_url = "https://oauth2.googleapis.com/token"
+    token_data = {
+        "client_id": client_id,
+        "client_secret": client_secret,
+        "code": code,
+        "grant_type": "authorization_code",
+        "redirect_uri": redirect_uri
+    }
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.post(token_url, data=token_data, timeout=15) as resp:
+                token_res = await resp.json()
+
+            access_token = token_res.get("access_token")
+            if not access_token:
+                err_desc = token_res.get("error_description", "Không lấy được access token từ Google")
+                return web.Response(text=f"Lỗi xác thực Google: {err_desc}", content_type="text/plain; charset=utf-8", status=400)
+
+            userinfo_url = "https://www.googleapis.com/oauth2/v3/userinfo"
+            async with session.get(userinfo_url, headers={"Authorization": f"Bearer {access_token}"}, timeout=15) as u_resp:
+                user_info = await u_resp.json()
+
+            google_sub = user_info.get("sub")
+            email = user_info.get("email", "").lower()
+            name = user_info.get("name") or email.split("@")[0]
+            avatar = user_info.get("picture", "")
+
+            user_id = f"google_{google_sub}"
+
+            conn = sqlite3.connect(DB_PATH)
+            c = conn.cursor()
+            c.execute("SELECT id, email, name FROM users WHERE id = ? OR email = ?", (user_id, email))
+            existing = c.fetchone()
+
+            if existing:
+                real_uid = existing[0]
+                c.execute("UPDATE users SET name = ?, avatar = ?, provider = 'google', google_id = ? WHERE id = ?",
+                          (name, avatar, google_sub, real_uid))
+                user_id = real_uid
+            else:
+                c.execute(
+                    "INSERT INTO users (id, email, name, avatar, provider, google_id) VALUES (?, ?, ?, ?, 'google', ?)",
+                    (user_id, email, name, avatar, google_sub)
+                )
+                agent_id = f"ag_{uuid.uuid4().hex[:10]}"
+                c.execute("""
+                INSERT INTO agents (id, user_id, name, model, voice, prompt)
+                VALUES (?, ?, 'Trợ Lý Mặc Định', 'deepseek-chat', 'vi-VN-HoaiMyNeural',
+                        'Bạn là trợ lý AI thông minh, giao tiếp tiếng Việt tự nhiên và súc tích.')
+                """, (agent_id, user_id))
+
+            conn.commit()
+            conn.close()
+
+            user_obj = {
+                "user_id": user_id,
+                "email": email,
+                "name": name,
+                "avatar": avatar,
+                "provider": "google"
+            }
+            user_json = json.dumps(user_obj)
+
+            return web.Response(
+                text=f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"><title>Đăng Nhập Thành Công</title></head>
+<body style="background:#090d16;color:#f1f5f9;font-family:sans-serif;display:flex;justify-content:center;align-items:center;height:100vh;margin:0;">
+    <div style="text-align:center;">
+        <h3>Đang chuyển hướng về bảng điều khiển...</h3>
+        <script>
+            sessionStorage.setItem('nioh_user', JSON.stringify({user_json}));
+            window.location.href = '/portal';
+        </script>
+    </div>
+</body>
+</html>""",
+                content_type="text/html",
+                charset="utf-8"
+            )
+
+    except Exception as e:
+        logger.error(f"Lỗi xử lý Google OAuth: {e}")
+        return web.Response(text=f"Lỗi xác thực Google: {str(e)}", content_type="text/plain; charset=utf-8", status=500)
+
+
+# ── REST API XÁC THỰC EMAIL / PASSWORD ────────────────────────────
 
 async def api_portal_register(request):
     data = await request.json()
@@ -93,10 +285,9 @@ async def api_portal_register(request):
     c = conn.cursor()
     try:
         user_id = f"usr_{uuid.uuid4().hex[:10]}"
-        c.execute("INSERT INTO users (id, email, password_hash, name) VALUES (?, ?, ?, ?)",
+        c.execute("INSERT INTO users (id, email, password_hash, name, provider) VALUES (?, ?, ?, ?, 'local')",
                   (user_id, email, _hash_pw(password), name))
 
-        # Tự động tạo 1 Agent mặc định cho tài khoản mới
         agent_id = f"ag_{uuid.uuid4().hex[:10]}"
         c.execute("""
         INSERT INTO agents (id, user_id, name, model, voice, prompt)
@@ -105,7 +296,7 @@ async def api_portal_register(request):
         """, (agent_id, user_id))
 
         conn.commit()
-        user = {"user_id": user_id, "email": email, "name": name}
+        user = {"user_id": user_id, "email": email, "name": name, "provider": "local", "avatar": ""}
         return web.json_response({"success": True, "message": "Đăng ký tài khoản thành công.", "user": user})
     except sqlite3.IntegrityError:
         return web.json_response({"success": False, "message": "Địa chỉ email này đã được đăng ký trước đó."})
@@ -120,12 +311,12 @@ async def api_portal_login(request):
 
     conn = sqlite3.connect(DB_PATH)
     c = conn.cursor()
-    c.execute("SELECT id, email, name FROM users WHERE email = ? AND password_hash = ?", (email, _hash_pw(password)))
+    c.execute("SELECT id, email, name, avatar, provider FROM users WHERE email = ? AND password_hash = ?", (email, _hash_pw(password)))
     row = c.fetchone()
     conn.close()
 
     if row:
-        user = {"user_id": row[0], "email": row[1], "name": row[2]}
+        user = {"user_id": row[0], "email": row[1], "name": row[2], "avatar": row[3] or "", "provider": row[4]}
         return web.json_response({"success": True, "user": user})
     return web.json_response({"success": False, "message": "Thông tin email hoặc mật khẩu không chính xác."})
 
@@ -218,7 +409,6 @@ async def api_portal_get_devices(request):
     devices = []
     for r in rows:
         dev_id = r[0]
-        # Trạng thái online được lấy trực tiếp từ bảng active sessions thực tế
         is_online = dev_id in ACTIVE_CONNECTIONS
         devices.append({
             "device_id": dev_id,
@@ -295,7 +485,7 @@ async def api_portal_delete_device(request):
     return web.json_response({"success": True, "message": "Đã hủy ghép đôi thiết bị."})
 
 
-# ── GIAO DIỆN WEB PORTAL (TECHNICAL & PROFESSIONAL CONSOLE) ────────
+# ── GIAO DIỆN WEB PORTAL (TECHNICAL CONSOLE) ───────────────────────
 
 HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
 <html lang="vi">
@@ -329,6 +519,20 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         .auth-card { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px; padding: 32px; max-width: 420px; margin: 60px auto; }
         .auth-title { font-size: 20px; font-weight: 700; margin-bottom: 6px; text-align: center; }
         .auth-desc { font-size: 13px; color: var(--text-muted); text-align: center; margin-bottom: 24px; }
+        
+        /* Google Button */
+        .btn-google {
+            display: flex; align-items: center; justify-content: center; gap: 10px; width: 100%;
+            background: #ffffff; color: #1f2937; padding: 11px 16px; border-radius: 8px; font-weight: 600;
+            font-size: 14px; text-decoration: none; border: 1px solid #d1d5db; margin-bottom: 20px; transition: 0.15s;
+        }
+        .btn-google:hover { background: #f3f4f6; }
+
+        .auth-divider { display: flex; align-items: center; text-align: center; color: var(--text-muted); font-size: 12px; margin: 20px 0; text-transform: uppercase; letter-spacing: 0.5px; }
+        .auth-divider::before, .auth-divider::after { content: ''; flex: 1; border-bottom: 1px solid var(--panel-border); }
+        .auth-divider::before { margin-right: 12px; }
+        .auth-divider::after { margin-left: 12px; }
+
         .auth-tab { display: flex; border-bottom: 1px solid var(--panel-border); margin-bottom: 20px; }
         .auth-tab button { flex: 1; padding: 10px; background: none; border: none; font-weight: 600; cursor: pointer; color: var(--text-muted); font-size: 13px; }
         .auth-tab button.active { color: var(--accent); border-bottom: 2px solid var(--accent); margin-bottom: -1px; }
@@ -373,6 +577,8 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
         .agent-meta { font-size: 12px; color: var(--text-muted); font-family: var(--mono); margin-bottom: 10px; }
         .agent-prompt { font-size: 12px; color: var(--text-main); line-height: 1.4; margin-bottom: 14px; flex-grow: 1; background: #070a12; padding: 8px 10px; border-radius: 6px; }
 
+        .avatar-img { width: 28px; height: 28px; border-radius: 50%; object-fit: cover; }
+
         /* Modal */
         .modal { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.7); z-index: 200; justify-content: center; align-items: center; }
         .modal-content { background: var(--panel); border: 1px solid var(--panel-border); border-radius: 12px; padding: 24px; width: 480px; max-width: 90%; }
@@ -385,7 +591,8 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             <div class="brand-title">Ni-Oh Voice Portal</div>
             <div class="brand-subtitle">Bảng Quản Trị Thiết Bị & Trợ Lý AI</div>
         </div>
-        <div id="userProfile" style="display: none; align-items: center; gap: 14px;">
+        <div id="userProfile" style="display: none; align-items: center; gap: 12px;">
+            <img id="userAvatarImg" class="avatar-img" src="" style="display: none;">
             <span id="userNameDisplay" style="font-size: 13px; font-weight: 600;"></span>
             <button class="btn btn-secondary btn-sm" onclick="logoutUser()">Đăng Xuất</button>
         </div>
@@ -395,6 +602,19 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
     <div id="authSection" class="auth-card">
         <div class="auth-title">Đăng Nhập Quản Trị</div>
         <div class="auth-desc">Truy cập bảng điều khiển thiết bị Xiaozhi của bạn</div>
+
+        <!-- Nút Đăng Nhập Bằng Tài Khoản Google -->
+        <a href="/api/auth/google/login" class="btn-google">
+            <svg width="18" height="18" viewBox="0 0 18 18" xmlns="http://www.w3.org/2000/svg">
+                <path d="M17.64 9.2c0-.637-.057-1.251-.164-1.84H9v3.481h4.844c-.209 1.125-.843 2.078-1.796 2.717v2.258h2.908c1.702-1.567 2.684-3.874 2.684-6.616z" fill="#4285F4"/>
+                <path d="M9 18c2.43 0 4.467-.806 5.956-2.184l-2.908-2.258c-.806.54-1.837.86-3.048.86-2.344 0-4.328-1.584-5.036-3.711H.957v2.332C2.438 15.983 5.482 18 9 18z" fill="#34A853"/>
+                <path d="M3.964 10.707c-.18-.54-.282-1.117-.282-1.707s.102-1.167.282-1.707V4.961H.957C.347 6.175 0 7.55 0 9s.347 2.825.957 4.039l3.007-2.332z" fill="#FBBC05"/>
+                <path d="M9 3.58c1.321 0 2.508.454 3.44 1.345l2.582-2.58C13.463.891 11.426 0 9 0 5.482 0 2.438 2.017.957 4.961L3.964 7.293C4.672 5.166 6.656 3.58 9 3.58z" fill="#EA4335"/>
+            </svg>
+            Đăng nhập bằng tài khoản Google
+        </a>
+
+        <div class="auth-divider">hoặc bằng tài khoản email</div>
 
         <div class="auth-tab">
             <button id="tabBtnLogin" class="active" onclick="switchAuthTab('login')">Đăng Nhập</button>
@@ -432,9 +652,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
                     <span>Danh Sách Trợ Lý AI</span>
                     <button class="btn btn-primary btn-sm" style="width: auto;" onclick="openAgentModal()">+ Thêm Trợ Lý Mới</button>
                 </div>
-                <div id="agentsGrid" class="agent-grid">
-                    <!-- Render dynamically -->
-                </div>
+                <div id="agentsGrid" class="agent-grid"></div>
             </div>
         </div>
 
@@ -445,9 +663,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
                     <span>Mạch ESP32 Đã Ghép Đôi</span>
                     <button class="btn btn-primary btn-sm" style="width: auto;" onclick="openBindModal()">+ Ghép Đôi Bằng Mã PIN 6 Số</button>
                 </div>
-                <div id="devicesTableContainer">
-                    <!-- Render dynamically -->
-                </div>
+                <div id="devicesTableContainer"></div>
             </div>
         </div>
 
@@ -599,6 +815,14 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             document.getElementById('userProfile').style.display = 'flex';
             document.getElementById('userNameDisplay').innerText = user.name || user.email;
 
+            const avatarImg = document.getElementById('userAvatarImg');
+            if (user.avatar) {
+                avatarImg.src = user.avatar;
+                avatarImg.style.display = 'block';
+            } else {
+                avatarImg.style.display = 'none';
+            }
+
             loadAllData();
             loadFirmwareEndpoints();
         }
@@ -715,7 +939,7 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
 
         async function deleteAgent(id, name) {
             if (!confirm(`Bạn có chắc chắn muốn xóa Trợ lý "${name}"?`)) return;
-            const res = await fetch('/api/portal/delete-agent', {
+            await fetch('/api/portal/delete-agent', {
                 method: 'POST',
                 headers: {'Content-Type': 'application/json'},
                 body: JSON.stringify({ user_id: currentUser.user_id, id: id })
@@ -848,7 +1072,6 @@ HTML_XIAOZHI_PORTAL = """<!DOCTYPE html>
             document.getElementById('fwJsonConfig').value = JSON.stringify(configObj, null, 2);
         }
 
-        // Khôi phục phiên làm việc nếu đã đăng nhập
         const saved = sessionStorage.getItem('nioh_user');
         if (saved) {
             try { onLoginSuccess(JSON.parse(saved)); } catch(e){}
